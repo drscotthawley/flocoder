@@ -37,7 +37,7 @@ source .venv/bin/activate
 # Install the package in editable mode
 uv pip install -e .
 
-# Optional: Install development dependencies
+# Optional: Install development dependencies (jupyter, others...)
 uv pip install -e ".[dev]"
 ```
 
