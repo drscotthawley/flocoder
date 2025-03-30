@@ -1,7 +1,8 @@
 # flocoder
 
-A latent generative flow matching model for MIDI piano roll images.
-This is intended as a lightweight, fast (and maybe interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI).
+A (quantized) latent generative flow matching model.
+
+This is primarily intended as a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but is designed to work on more general datasets too. 
 
 ## NOTE: This is all just dummy code right now, nothing works! -SHH
 
