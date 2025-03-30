@@ -1,4 +1,4 @@
-# flocoder
+# Flocoder
 
 A (quantized) latent generative flow matching model.
 
