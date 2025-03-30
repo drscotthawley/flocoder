@@ -1,0 +1,11 @@
+# configs/vqvae_config.yaml
+model:
+  hidden_channels: 256
+  num_downsamples: 3
+  vq_num_embeddings: 32
+  vq_embedding_dim: 256
+  
+training:
+  batch_size: 4096
+  learning_rate: 1e-3
+  num_epochs: 10000
