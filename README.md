@@ -19,6 +19,12 @@ The above diagram illustrates the architecture of our model: a VQVAE compresses 
 git clone https://github.com/drscotthawley/flocoder.git
 cd flocoder
 
+# Install uv if not already installed
+# On macOS/Linux:
+# curl -LsSf https://astral.sh/uv/install.sh | sh
+# On Windows PowerShell:
+# irm https://astral.sh/uv/install.ps1 | iex
+
 # Create a virtual environment with uv
 uv venv
 
