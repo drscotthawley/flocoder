@@ -25,8 +25,8 @@ cd flocoder
 # On Windows PowerShell:
 # irm https://astral.sh/uv/install.ps1 | iex
 
-# Create a virtual environment with uv
-uv venv
+# Create a virtual environment with uv, specifying Python 3.10
+uv venv --python=python3.10
 
 # Activate the virtual environment
 # On Linux/macOS:
