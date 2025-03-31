@@ -37,6 +37,9 @@ source .venv/bin/activate
 # Install the package in editable mode
 uv pip install -e .
 
+# Recommended: Install development dependencies (jupyter, others...)
+uv pip install -e ".[dev]"
+
 # Recommended: install NATTEN separately with special flags
 uv pip install natten --no-build-isolation
 # if that fails, see NATTEN's install instructions (https://github.com/SHI-Labs/NATTEN/blob/main/docs/install.md)
@@ -44,9 +47,6 @@ uv pip install natten --no-build-isolation
 # uv pip install natten==0.17.3+torch250cu124 -f https://shi-labs.com/natten/wheels/
 # or build fromt the top of the source, e.g.:
 # uv pip install --no-build-isolation git+https://github.com/SHI-Labs/NATTEN
-
-# Recommended: Install development dependencies (jupyter, others...)
-uv pip install -e ".[dev]"
 ```
 
 ## Project Structure
