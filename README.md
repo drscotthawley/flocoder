@@ -37,6 +37,9 @@ source .venv/bin/activate
 # Install the package in editable mode
 uv pip install -e .
 
+# You also need to install NATTEN separately with special flags
+uv pip install natten --no-build-isolation
+
 # Optional: Install development dependencies (jupyter, others...)
 uv pip install -e ".[dev]"
 ```
