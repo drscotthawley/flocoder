@@ -1,6 +1,6 @@
 # Flocoder
 
-A (quantized) latent generative flow matching model.
+A (quantized) latent generative flow matching model. (The name is inspired by "vocoder.")
 
 This is primarily intended as a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but is designed to work on more general datasets too. 
 
