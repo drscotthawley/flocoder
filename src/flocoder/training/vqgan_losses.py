@@ -3,7 +3,7 @@ import torch
 from torch.nn.utils import spectral_norm
 from torch import nn
 from torch.utils.checkpoint import checkpoint
-from src.flocoder.models.patch_discriminator import PatchDiscriminator
+from flocoder.models.patch_discriminator import PatchDiscriminator
 
 # Note: not all of these actually get used; and/or can be affected via config.lamba_* values 
 
