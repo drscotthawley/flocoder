@@ -41,7 +41,7 @@ uv pip install -e .
 uv pip install natten --no-build-isolation
 # if that fails, see NATTEN's install instructions (https://github.com/SHI-Labs/NATTEN/blob/main/docs/install.md)
 # and specify exact version number, e.g.
-# uv pip install natten==0.17.5+torch260cu126 -f https://shi-labs.com/natten/wheels/
+# uv pip install natten==0.17.3+torch250cu124 -f https://shi-labs.com/natten/wheels/
 
 # Recommended: Install development dependencies (jupyter, others...)
 uv pip install -e ".[dev]"
