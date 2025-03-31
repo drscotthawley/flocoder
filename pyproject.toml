@@ -24,6 +24,8 @@ dependencies = [
     "pyyaml>=6.0",
     "vector_quantize_pytorch>=1.22.4",
     "wheel",
+    "wandb>=0.15.0",
+    "pillow>=9.0.0",
 ]
 
 [project.optional-dependencies]
