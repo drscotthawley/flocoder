@@ -4,7 +4,7 @@ A (quantized) latent generative flow matching model. (The name is inspired by "v
 
 This is primarily intended as a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but is designed to work on more general datasets too. 
 
-## NOTE: This is all just dummy code right now, nothing works! -SHH
+## NOTE: This is a refactor of older/messier code. Not everything in this refactor works yet. -SHH
 
 ## Architecture Overview
 
