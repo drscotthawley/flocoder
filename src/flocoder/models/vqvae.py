@@ -22,8 +22,7 @@ import os
 # TODO: add some code that can convert a NATTEN model to a non-NATTEN model  
 try:
     import natten
-    if os.environ.get('PRINT_NATTEN_VERSION'):
-        print("Using NATTEN version ", natten.__version__)
+    print("Using NATTEN version ", natten.__version__)
 except ImportError:
     warnings.warn("Warning: NATTEN not found. Running without. You might want to install it.")
     natten = None
