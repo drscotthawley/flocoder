@@ -71,7 +71,7 @@ The package includes several training scripts located in the `scripts/` director
 
 ```bash
 # Train the VQVAE model
-python scripts/train_vqvae.py --config configs/vqvae_config.yaml
+python scripts/train_vqgan.py --config configs/vqgan_config.yaml
 ```
 
 The VQVAE compresses MIDI piano roll images into a quantized latent representation.

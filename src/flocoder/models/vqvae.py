@@ -208,20 +208,21 @@ class NoiseInjection(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
-                 vq_embedding_dim=256, inject_noise=True, use_checkpoint=False):
+                 vq_embedding_dim=256, inject_noise=True, use_checkpoint=False,
+                 init_layers = []):
         super().__init__()
         
-        decoder_layers = []
-        
-        # Initial projection
+        decoder_layers = init_layers
+
+        # projection
         current_channels = hidden_channels * (2 ** (num_downsamples - 1))
-        initial_layers = [
+        next_layers = [
             nn.Conv2d(vq_embedding_dim, current_channels, 1),
             NoiseInjection(current_channels), # note NoiseInjection defaults to a no-op; only here for playing with later
             EncDecResidualBlock(current_channels, current_channels, 
                               use_checkpoint=use_checkpoint, attention='full')
         ]
-        decoder_layers.extend(initial_layers)
+        decoder_layers.extend(next_layers)
 
         # Upsampling blocks
         for i in range(num_downsamples - 1, -1, -1):
@@ -319,16 +320,15 @@ class VQVAE(nn.Module):
         encoder_layers.append(EncDecResidualBlock(in_channels_current, vq_embedding_dim, 
                             stride=1, use_checkpoint=use_checkpoint, attention=attention))
         encoder_layers.append(nn.Conv2d(vq_embedding_dim, vq_embedding_dim, 1)) # final conv2d undoes swish at end of EncDecResidualBlock
-        self.encoder = nn.Sequential(*encoder_layers)
-
-        # Add compression layers before VQ
-        #compressed_dim = 4 #12 # 8
-        self.compress = nn.Sequential(
+        
+        # added this extra set of compression layers
+        compress_layers = [
             nn.Conv2d(vq_embedding_dim, compressed_dim, 1),  # Compress to 8 dimensions
             nn.GroupNorm(2, compressed_dim),
             nn.SiLU(),
-            nn.Conv2d(compressed_dim, compressed_dim, 3, padding=1), # 3x3 conv, undo the SiLU bias
-        )
+            nn.Conv2d(compressed_dim, compressed_dim, 3, padding=1)]
+        encoder_layers.extend(compress_layers)
+        self.encoder = nn.Sequential(*encoder_layers)
         self.info = None
 
 
@@ -357,30 +357,39 @@ class VQVAE(nn.Module):
         #self.vq = initialize_vq_with_normal_codebook(self.vq, level=0) # didn't help. not including
 
         print("compressed_dim, vq_embedding_dim = ",compressed_dim, vq_embedding_dim)
-        self.expand = nn.Sequential(
+        
+        # self.expand = nn.Sequential(
+        #     nn.Conv2d(compressed_dim, vq_embedding_dim, 1),  # Expand back to original dimension
+        #     nn.GroupNorm(compressed_dim, vq_embedding_dim),
+        #     nn.SiLU(),
+        # )
+        uncompress_layers = [
             nn.Conv2d(compressed_dim, vq_embedding_dim, 1),  # Expand back to original dimension
             nn.GroupNorm(compressed_dim, vq_embedding_dim),
             nn.SiLU(),
-        )
-        
+        ]
         self.decoder = Decoder( in_channels=in_channels,
             hidden_channels=hidden_channels,
             num_downsamples=num_downsamples,
             vq_embedding_dim=vq_embedding_dim,
-            use_checkpoint=use_checkpoint
+            use_checkpoint=use_checkpoint,
+            init_layers=uncompress_layers,
         )
         #----- end of init
 
 
-    def encode(self, x):
+    def encode(self, x, debug=False):
+        if debug: print("\n vqvae: starting self.encode", flush=True)
         if self.use_checkpoint and self.training:
             return checkpoint(self.encoder, x, use_reentrant=False)
+        if debug: print("vqvae: calling self.encoder", flush=True)
         z = self.encoder(x)
-        return self.compress(z) # Sorry this is janky but I wanted more of a bottleneck so I added compress
-        
+        if debug: print("encode: z.shape = ", z.shape, flush=True)
+        return z
+    
     def decode(self, z_q, noise_strength=0.0):
-        z_expanded = self.expand(z_q)  # undoes the "compress" from self.encode
-        return self.decoder(z_expanded, noise_strength=noise_strength)
+        #z_q = self.expand(z_q)  # undoes the "compress" from self.encode
+        return self.decoder(z_q, noise_strength=noise_strength)
 
     @torch.no_grad()
     def calc_distance_stats(self, z_compressed_flat, z_q):

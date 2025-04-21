@@ -1,8 +1,23 @@
+import torch 
 from torchvision.utils import make_grid
 import wandb
 import matplotlib.pyplot as plt
 import tempfile
 import numpy as np
+
+def rgb2g(img_t):
+   """Convert RGB piano roll to grayscale float where: BLACK->0, RED->1.0, GREEN->0.5
+   Changes image from [3,H,W] to [1,H,W], and can include batch dimension."""
+   red = (img_t[-3] > 0.5).float()  # 1.0 for red
+   green = (img_t[-2] > 0.5).float() * 0.5  # 0.5 for green
+   return (red + green).unsqueeze(-3)
+
+def g2rgb(gf_img): # gf = greyscale float
+   """Convert grayscale back to RGB: 0->BLACK, 1.0->RED, 0.5->GREEN"""
+   if gf_img.shape[-3] == 3: return gf_img 
+   gf = gf_img.squeeze(-3)
+   return torch.stack([(gf >= 0.75).float(), (torch.abs(gf - 0.5) < 0.25).float(), torch.zeros_like(gf)], dim=-3)
+
 
 
 def viz_codebook(model, config, epoch):

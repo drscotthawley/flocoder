@@ -4,8 +4,28 @@ model:
   num_downsamples: 3
   vq_num_embeddings: 32
   vq_embedding_dim: 256
+  compressed_dim: 4
+  codebook_levels: 4
+  commitment-weight: 0.5
   
 training:
-  batch_size: 4096
+  batch_size: 80
   learning_rate: 1e-3
   num_epochs: 10000
+  data: "~/datasets/POP909_images"
+  epochs: 100000
+  base_lr: 1e-4
+  image_size: 128
+  warmup_epochs: 15
+  # regularization parameters
+  lambda_adv: 0.03
+  lambda_ce: 2.0
+  lambda_l1: 0.2
+  lambda_mse: 0.5
+  lambda_spec: 2e-4 
+  lambda_vq: 0.25 
+
+wandb: 
+  project_name: "flocoder-vqgan"
+# run name
+# no_grad_ckpt

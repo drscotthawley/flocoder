@@ -1,37 +1,16 @@
 #! /usr/bin/env python3 
 import os
+import sys
 import warnings
+import math
 warnings.filterwarnings("ignore", category=FutureWarning) # re. NATTEN's non-stop FutureWarnings
 import torch
 torch.set_float32_matmul_precision('high')
-import matplotlib
-matplotlib.use('Agg')
-import math
-import torch.nn as nn
-import torch.optim as optim
-#from torch_optimizer import Ranger
-#from pytorch_ranger import Ranger  # this is from ranger.py
-from torchvision.models import vgg16
-from torchvision.utils import make_grid
 
-import wandb
-from tqdm.auto import tqdm
-import argparse
-
-
-from flocoder.data.dataloaders import create_image_loaders
-from flocoder.models.vqvae import VQVAE
 from flocoder.training.vqgan_losses import *
-from flocoder.utils.viz import viz_codebook, viz_codebooks
-
-#from geomloss import SamplesLoss
-from collections import defaultdict
-
-
-import random 
+from flocoder.eval.metrics import *
 
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-
 class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
     def __init__(self, optimizer, T_0, T_mult=1,
                     eta_min=0, last_epoch=-1, verbose=False, decay=0.6):
@@ -130,44 +109,26 @@ def load_non_frozen(model, checkpoint):
 
 
 
-def main():
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # Training parameters 
-    parser.add_argument('--batch-size', type=int, default=32, help='the batch size') 
-    parser.add_argument('--data', type=str, default=os.path.expanduser('~')+'/datasets/POP909_images', help='path to top-level-directory containing custom image data. If not specified, uses Flowers102')
-    parser.add_argument('--data-fakez', type=str, default=None, help='Directory of generated (fake) pre-encoder latents (to align via distribution-based losses)')
-    parser.add_argument('--epochs', type=int, default=1000000, help='number of epochs. (just let it keep training for hours/days/weeks/etc.)')
-    #parser.add_argument('--epochs', type=int, default=300, help='number of epochs. (just let it keep training for hours/days/weeks/etc.)')
-    parser.add_argument('--base-lr', type=float, default=1e-4, help='base learning rate for batch size of 32')
-    parser.add_argument('--image-size', type=int, default=128, help='will rescale images to squares of (image-size, image-size)')
-    parser.add_argument('--warmup-epochs', type=int, default=15, help='number of epochs before enabling adversarial loss')  
-    parser.add_argument('--lambda-adv', type=float, default=0.03,  help="regularization param for G part of adversarial loss") 
-    parser.add_argument('--lambda-ce',  type=float, default=2.0, help="regularization param for cross-entropy loss")
-    parser.add_argument('--lambda-l1',  type=float, default=0.2, help="regularization param for L1/Huber loss")
-    parser.add_argument('--lambda-mse', type=float, default=0.5, help="regularization param for MSE loss")
-    parser.add_argument('--lambda-perc',type=float, default=1e-5, help="regularization param for perceptual loss")
-    parser.add_argument('--lambda-sinkhorn',type=float, default=1e-5,  help="regularization param for sinkhorn loss")
 
-    parser.add_argument('--lambda-spec',type=float, default=2e-4,  help="regularization param for spectral loss (1e-4='almost off')") # with lambda_spec=0, spec_loss serves as an independent metric
-    parser.add_argument('--lambda-vq',  type=float, default=0.25, help="reg factor mult'd by VQ commitment loss")
-    parser.add_argument('--no-wandb', action='store_true', help='disable wandb logging')
 
-    # Model parameters
-    parser.add_argument('--load-checkpoint', type=str, default=None, help='path to load checkpoint to resume training from')
-    parser.add_argument('--hidden-channels', type=int, default=256)
-    parser.add_argument('--num-downsamples'  , type=int, default=3, help='total downsampling is 2**[this]')
-    parser.add_argument('--vq-num-embeddings', type=int, default=32, help='aka codebook length')
-    parser.add_argument('--vq-embedding-dim' , type=int, default=256, help='pre-vq emb dim  before compression')
-    parser.add_argument('--compressed-dim' , type=int, default=4, help='ACTUAL dims of codebook vectors')
-    parser.add_argument('--codebook-levels'  , type=int, default=4, help='number of RVQ levels')
-    parser.add_argument('--commitment-weight'  , type=float, default=0.5, help='VQ commitment weight, aka quantization strength')
-    parser.add_argument('--project-name', type=str, default="vqgan-midi", help='WandB project name')
-    parser.add_argument('--run-name', type=str, default=None, help='WandB run name')
-    parser.add_argument('--no-grad-ckpt', action='store_true', help='disable gradient checkpointing (disabled uses more memory but faster)') 
+def main(args):
 
-    args = parser.parse_args()
-    args.learning_rate = args.base_lr * math.sqrt(args.batch_size / 32)
-    print("args = ",args)
+    import matplotlib
+    matplotlib.use('Agg')
+    import torch.nn as nn
+    import torch.optim as optim
+    from torchvision.models import vgg16
+    from torchvision.utils import make_grid
+
+    import wandb
+    from tqdm.auto import tqdm
+
+    from flocoder.data.dataloaders import create_image_loaders
+    from flocoder.models.vqvae import VQVAE
+    from flocoder.utils.viz import viz_codebook, viz_codebooks
+
+    from collections import defaultdict
+    import random 
     
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
@@ -175,17 +136,6 @@ def main():
     # Data setup
     train_loader, val_loader = create_image_loaders(batch_size=args.batch_size, image_size=args.image_size, 
                                             data_path=args.data, num_workers=16)
-    fakez_train_dl = None
-    fakez_val_dl = None
-    sinkhorn_loss = None
-    # if args.data_fakez is not None: # don't worry about this
-    #     fakez_train_dl, fakez_val_dl = create_fakez_dataloaders(
-    #         args.data_fakez, 
-    #         batch_size=args.batch_size, 
-    #         rand_length=(len(train_loader) * args.batch_size + len(val_loader) * args.batch_size)
-    #     )
-    #     print("len(fakez_train_dl), len(fakez_val_dl) =",len(fakez_train_dl), len(fakez_val_dl))
-    #     #sinkhorn_loss = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)#, backend="multiscale")
 
     # Initialize models and losses
     vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
@@ -203,10 +153,6 @@ def main():
         commitment_weight=args.commitment_weight,
         use_checkpoint=not args.no_grad_ckpt,
     ).to(device)
-
-    if args.data_fakez is not None:
-        print("Freezing encoder and compress")
-        model = freeze_front_vqvae(model)
 
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
     scheduler = None # optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.learning_rate, total_steps=args.epochs)
@@ -244,11 +190,6 @@ def main():
         epoch_losses = defaultdict(float)
         total_batches = 0
         
-        # Create fresh fakez training iterator at start of epoch
-        if fakez_train_dl is not None:
-            print(f"Creating new fakez train iterator. fakez_train_dl has {len(fakez_train_dl)} batches")
-            fakez_train_iterator = iter(fakez_train_dl)
-
         # Training phase
         pbar = tqdm(train_loader, desc=f'Epoch {epoch}/{args.epochs}')
         for batch_idx, batch in enumerate(pbar):
@@ -256,35 +197,15 @@ def main():
             source_imgs = batch[0].to(device)
             target_imgs = source_imgs
             
-            # Get fakez batch, cycling through data if needed
-            if fakez_train_dl is not None:
-                try:
-                    fakez_batch = next(fakez_train_iterator)
-                except StopIteration:
-                    print("Recreating fakez train iterator after StopIteration")
-                    fakez_train_iterator = iter(fakez_train_dl)
-                    try:
-                        fakez_batch = next(fakez_train_iterator)
-                    except StopIteration:
-                        print("ERROR: New iterator also raised StopIteration!")
-                        raise
-            else:
-                fakez_batch = None
             noise_strength = 0.0 if epoch < args.warmup_epochs else 0.1 * min(1.0, (epoch - args.warmup_epochs) / 10)
 
             # Pre-warmup training
             if epoch < args.warmup_epochs:
                 recon, vq_loss = model(source_imgs)
-                if fakez_batch is not None:
-                    fakez = fakez_batch.to(device)
-                    fakez_recon = z_to_img(fakez, model)
-                    losses = compute_losses(recon, target_imgs, vq_loss, vgg, 
-                                         adv_loss=None, epoch=epoch,  config=args,
-                                         sinkhorn_loss=sinkhorn_loss, fakez_recon=fakez_recon)
-                else:
-                    losses = compute_losses(recon, target_imgs, vq_loss, vgg, 
-                                         adv_loss=None, epoch=epoch, config=args)
-                losses['total'] = get_total_loss(losses, args)
+  
+                losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
+                                        adv_loss=None, epoch=epoch, config=args)
+                losses['total'] = get_total_vqgan_loss(losses, args)
                 
                 optimizer.zero_grad()
                 losses['total'].backward()
@@ -314,17 +235,10 @@ def main():
                 # Train generator
                 if batch_idx % 1 == 0:
                     recon, vq_loss = model(source_imgs, noise_strength=noise_strength)
-                    if fakez_batch is not None:
-                        fakez = fakez_batch.to(device)
-                        fakez_recon = z_to_img(fakez, model)
-                        losses = compute_losses(recon, target_imgs, vq_loss, vgg, 
-                                             adv_loss=adv_loss, epoch=epoch, config=args,
-                                             sinkhorn_loss=sinkhorn_loss, fakez_recon=fakez_recon)
-                    else:
-                        losses = compute_losses(recon, target_imgs, vq_loss, vgg, 
-                                             adv_loss=adv_loss, epoch=epoch, config=args)
+                    losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
+                                            adv_loss=adv_loss, epoch=epoch, config=args)
 
-                    losses['total'] = get_total_loss(losses, args)
+                    losses['total'] = get_total_vqgan_loss(losses, args)
 
                     optimizer.zero_grad()
                     losses['total'].backward()
@@ -365,47 +279,17 @@ def main():
             model.eval()
             val_losses = defaultdict(float)
             val_total_batches = 0
-
-            # Create fresh fakez validation iterator
-            if fakez_val_dl is not None:
-                print(f"Creating new fakez val iterator. fakez_val_dl has {len(fakez_val_dl)} batches")
-                fakez_val_iterator = iter(fakez_val_dl)
-
             
             with torch.no_grad():
                 for batch_idx, batch in enumerate(val_loader):
                     source_imgs = batch[0].to(device)
                     target_imgs = source_imgs
 
-                    # Get fakez validation batch
-                    if fakez_val_dl is not None:
-                        try:
-                            fakez_batch = next(fakez_val_iterator)
-                        except StopIteration:
-                            print("Recreating fakez val iterator after StopIteration")
-                            fakez_val_iterator = iter(fakez_val_dl)
-                            try:
-                                fakez_batch = next(fakez_val_iterator)
-                            except StopIteration:
-                                print("ERROR: New validation iterator also raised StopIteration!")
-                                raise
-                    else:
-                        fakez_batch = None
-
                     # Basic validation forward pass
                     recon, vq_loss, dist_stats = model(source_imgs, get_stats=True)
-                    if fakez_val_dl is not None:
-                        with torch.no_grad(): # validation so we don't need grads
-                            fakez_batch = next(iter(fakez_val_dl))
-                            fakez = fakez_batch.to(device)  # OOM ERROR HAPPENS HERE
-                            fakez_recon = z_to_img(fakez, model)
-                            losses = compute_losses(recon, target_imgs, vq_loss, vgg,
-                                                adv_loss=adv_loss, epoch=epoch, config=args,
-                                                sinkhorn_loss=sinkhorn_loss, fakez_recon=fakez_recon)
-                    else:
-                        losses = compute_losses(recon, target_imgs, vq_loss, vgg,
+                    losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg,
                                             adv_loss=adv_loss, epoch=epoch, config=args)
-                    losses['total'] = get_total_loss(losses, args)
+                    losses['total'] = get_total_vqgan_loss(losses, args)
 
                     # Update validation losses
                     batch_losses = {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
@@ -435,17 +319,8 @@ def main():
                         recon = torch.clamp(recon[:8], orig.min(), orig.max())
                         orig, recon = g2rgb(orig), g2rgb(recon)
                         
-                        if fakez_val_dl is not None:
-                            fakez_batch = next(iter(fakez_val_dl))
-                            fakez = fakez_batch[:nrow].to(device)
-                            fakez_recon = z_to_img(fakez, model)
-                            fakez_recon = torch.clamp(fakez_recon, orig.min(), orig.max())
-                            fakez_recon = g2rgb(fakez_recon)
-                            viz_images = torch.cat([orig, recon, fakez_recon])
-                            caption = f'Epoch {epoch} - Top: Source, Middle: Recon, Bottom: Decoded Fakez'
-                        else:
-                            viz_images = torch.cat([orig, recon])
-                            caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
+                        viz_images = torch.cat([orig, recon])
+                        caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
                         
                         log_dict['demo/examples'] = wandb.Image(
                             make_grid(viz_images, nrow=8, normalize=True),
@@ -483,6 +358,132 @@ def main():
 
         if scheduler:
             scheduler.step()
-            
+
+
+    return 'Main finished.'
+
+
+def parse_args_with_config():
+    # This lets you specify args via a YAML config file and/or override those with the CLI
+    # i.e. CLI takes precedence 
+    import argparse
+    import yaml 
+
+    # First pass to check for config file
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
+    args, _ = parser.parse_known_args()
+    
+    # Load config file if provided
+    config = {}
+    if args.config:
+        with open(args.config, 'r') as f:
+            yaml_config = yaml.safe_load(f)
+        
+        # Flatten nested structure, and treat config variable names as CLI args
+        for section, params in yaml_config.items():
+            if isinstance(params, dict):
+                for key, value in params.items():
+                    config[key.replace('_', '-')] = value
+            else:
+                config[section.replace('_', '-')] = params
+    
+    # Create full parser with config-based defaults
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    
+    # Add config option
+    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
+    
+    # Training parameters with config-based defaults
+    parser.add_argument('--batch-size', type=int, default=config.get('batch-size', 32), 
+                       help='the batch size')
+    parser.add_argument('--data', type=str, 
+                       default=config.get('data', None), 
+                       help='path to top-level-directory containing custom image data')
+    parser.add_argument('--epochs', type=int, 
+                       default=config.get('num-epochs', 1000000), 
+                       help='number of epochs')
+    parser.add_argument('--base-lr', type=float, 
+                       default=config.get('learning-rate', 1e-4), 
+                       help='base learning rate for batch size of 32')
+    parser.add_argument('--image-size', type=int, 
+                       default=config.get('image-size', 128), 
+                       help='will rescale images to squares of (image-size, image-size)')
+    parser.add_argument('--warmup-epochs', type=int, 
+                       default=config.get('warmup-epochs', 15), 
+                       help='number of epochs before enabling adversarial loss')
+    parser.add_argument('--lambda-adv', type=float, 
+                       default=config.get('lambda-adv', 0.03), 
+                       help="regularization param for G part of adversarial loss")
+    parser.add_argument('--lambda-ce', type=float, 
+                       default=config.get('lambda-ce', 2.0), 
+                       help="regularization param for cross-entropy loss")
+    parser.add_argument('--lambda-l1', type=float, 
+                       default=config.get('lambda-l1', 0.2), 
+                       help="regularization param for L1/Huber loss")
+    parser.add_argument('--lambda-mse', type=float, 
+                       default=config.get('lambda-mse', 0.5), 
+                       help="regularization param for MSE loss")
+    parser.add_argument('--lambda-perc', type=float, 
+                       default=config.get('lambda-perc', 1e-5), 
+                       help="regularization param for perceptual loss")
+    parser.add_argument('--lambda-sinkhorn', type=float, 
+                       default=config.get('lambda-sinkhorn', 1e-5), 
+                       help="regularization param for sinkhorn loss")
+    parser.add_argument('--lambda-spec', type=float, 
+                       default=config.get('lambda-spec', 2e-4), 
+                       help="regularization param for spectral loss")
+    parser.add_argument('--lambda-vq', type=float, 
+                       default=config.get('lambda-vq', 0.25), 
+                       help="reg factor mult'd by VQ commitment loss")
+    parser.add_argument('--no-wandb', action='store_true', help='disable wandb logging')
+
+    # Model parameters
+    parser.add_argument('--load-checkpoint', type=str, 
+                       default=config.get('load-checkpoint', None), 
+                       help='path to load checkpoint to resume training from')
+    parser.add_argument('--hidden-channels', type=int, 
+                       default=config.get('hidden-channels', 256))
+    parser.add_argument('--num-downsamples', type=int, 
+                       default=config.get('num-downsamples', 3), 
+                       help='total downsampling is 2**[this]')
+    parser.add_argument('--vq-num-embeddings', type=int, 
+                       default=config.get('vq-num-embeddings', 32), 
+                       help='aka codebook length')
+    parser.add_argument('--vq-embedding-dim', type=int, 
+                       default=config.get('vq-embedding-dim', 256), 
+                       help='pre-vq emb dim before compression')
+    parser.add_argument('--compressed-dim', type=int, 
+                       default=config.get('compressed-dim', 4), 
+                       help='ACTUAL dims of codebook vectors')
+    parser.add_argument('--codebook-levels', type=int, 
+                       default=config.get('codebook-levels', 4), 
+                       help='number of RVQ levels')
+    parser.add_argument('--commitment-weight', type=float, 
+                       default=config.get('commitment-weight', 0.5), 
+                       help='VQ commitment weight, aka quantization strength')
+    parser.add_argument('--project-name', type=str, 
+                       default=config.get('project-name', "vqgan-midi"), 
+                       help='WandB project name')
+    parser.add_argument('--run-name', type=str, 
+                       default=config.get('run-name', None), 
+                       help='WandB run name')
+    parser.add_argument('--no-grad-ckpt', action='store_true', 
+                       help='disable gradient checkpointing')
+    
+    # Parse args
+    args = parser.parse_args()
+    
+    # Calculate learning rate based on batch size
+    args.learning_rate = args.base_lr * math.sqrt(args.batch_size / 32)
+    args.data = os.path.expanduser(args.data)
+    
+    return args
+
+
+
+
 if __name__ == '__main__':
-    main()
+    args = parse_args_with_config()
+    print("args = ",args)
+    main(args)
