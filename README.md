@@ -67,7 +67,8 @@ The project is organized as follows:
 
 The package includes several training scripts located in the `scripts/` directory:
 
-### Training the VQVAE
+### Training the VQGAN
+(terminology note: VQGAN = VQVAE + attention + adversarial loss. We use VQGAN/VQVAE somewhat interchangeably.)
 
 ```bash
 # Train the VQVAE model
