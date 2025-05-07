@@ -1,17 +1,34 @@
 #! /usr/bin/env python3 
+
+import matplotlib
+matplotlib.use('Agg')
 import os
 import sys
 import warnings
-import math
 warnings.filterwarnings("ignore", category=FutureWarning) # re. NATTEN's non-stop FutureWarnings
+import math
+from collections import defaultdict
+import random 
 import torch
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision('high') # did this just to check reconstruction error
+import torch.nn as nn
+import torch.optim as optim
+from torchvision.models import vgg16
+from torchvision.utils import make_grid
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+import wandb
+from tqdm.auto import tqdm
 
+from flocoder.data.dataloaders import create_image_loaders
+from flocoder.models.vqvae import VQVAE
+from flocoder.utils.viz import viz_codebook, viz_codebooks
 from flocoder.training.vqgan_losses import *
 from flocoder.eval.metrics import *
 
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+
+
 class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
+    "I added this scheduler to decay the base learning rate after T_0 epochs."
     def __init__(self, optimizer, T_0, T_mult=1,
                     eta_min=0, last_epoch=-1, verbose=False, decay=0.6):
         super().__init__(optimizer, T_0, T_mult=T_mult,
@@ -42,7 +59,7 @@ class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
 
 
 def z_to_img(z_compressed, vq_model, debug=False):
-
+    """utility routine to go from continuous z to output image"""
     # Reshape and prepare for VQ
     z_compressed = z_compressed.permute(0, 2, 3, 1)
     save_shape = z_compressed.shape
@@ -66,28 +83,11 @@ def z_to_img(z_compressed, vq_model, debug=False):
     return img 
 
 
-def freeze_front_vqvae(vqvae, debug=False):
-    # Freeze encoder
-    for param in vqvae.encoder.parameters():
-        param.requires_grad = False
-    
-    # Freeze compress layers
-    for param in vqvae.compress.parameters():
-        param.requires_grad = False
-    
-    # Verify the other parts are still trainable (optional)
-    if debug:
-        for name, param in vqvae.named_parameters():
-            if param.requires_grad:
-                print(f"Trainable: {name}")
-            else:
-                print(f"Frozen: {name}")
-    
-    return vqvae
-
-
-
-def load_non_frozen(model, checkpoint):
+def load_checkpoint_non_frozen(model, checkpoint):
+    """
+    Load only the frozen parameters from a checkpoint into the model.
+    (If no parames were frozen, then this loads the entire model.)
+    """
     checkpoint_state_dict = checkpoint['model_state_dict']
     model_state_dict = model.state_dict()
     filtered_state_dict = {}
@@ -110,26 +110,7 @@ def load_non_frozen(model, checkpoint):
 
 
 
-
 def main(args):
-
-    import matplotlib
-    matplotlib.use('Agg')
-    import torch.nn as nn
-    import torch.optim as optim
-    from torchvision.models import vgg16
-    from torchvision.utils import make_grid
-
-    import wandb
-    from tqdm.auto import tqdm
-
-    from flocoder.data.dataloaders import create_image_loaders
-    from flocoder.models.vqvae import VQVAE
-    from flocoder.utils.viz import viz_codebook, viz_codebooks
-
-    from collections import defaultdict
-    import random 
-    
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
@@ -138,10 +119,6 @@ def main(args):
                                             data_path=args.data, num_workers=16)
 
     # Initialize models and losses
-    vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
-    for param in vgg.parameters():
-        param.requires_grad = False
-    
     model = VQVAE(
         in_channels=3,
         hidden_channels=args.hidden_channels,
@@ -153,6 +130,12 @@ def main(args):
         commitment_weight=args.commitment_weight,
         use_checkpoint=not args.no_grad_ckpt,
     ).to(device)
+
+    # vgg is used for perceptual loss
+    vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
+    for param in vgg.parameters():
+        param.requires_grad = False
+    
 
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
     scheduler = None # optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.learning_rate, total_steps=args.epochs)
@@ -167,11 +150,10 @@ def main(args):
     if args.load_checkpoint is not None:
         checkpoint = torch.load(args.load_checkpoint, map_location=device)
         # model.load_state_dict(checkpoint['model_state_dict'])
-        model = load_non_frozen(model,checkpoint)
+        model = load_checkpoint_non_frozen(model,checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         #start_epoch = checkpoint['epoch'] + 1
         print(f"Resuming training from epoch {start_epoch}")
-
 
 
     # Initialize wandb
@@ -364,8 +346,10 @@ def main(args):
 
 
 def parse_args_with_config():
-    # This lets you specify args via a YAML config file and/or override those with the CLI
-    # i.e. CLI takes precedence 
+    """
+    This lets you specify args via a YAML config file and/or override those with command line args.
+    i.e. CLI args take precedence 
+    """
     import argparse
     import yaml 
 
@@ -427,9 +411,6 @@ def parse_args_with_config():
     parser.add_argument('--lambda-perc', type=float, 
                        default=config.get('lambda-perc', 1e-5), 
                        help="regularization param for perceptual loss")
-    parser.add_argument('--lambda-sinkhorn', type=float, 
-                       default=config.get('lambda-sinkhorn', 1e-5), 
-                       help="regularization param for sinkhorn loss")
     parser.add_argument('--lambda-spec', type=float, 
                        default=config.get('lambda-spec', 2e-4), 
                        help="regularization param for spectral loss")

@@ -1,0 +1,100 @@
+{
+  "_wandb": {
+    "value": {
+      "cli_version": "0.19.0",
+      "m": [],
+      "python_version": "3.10.12",
+      "t": {
+        "1": [
+          1,
+          41,
+          55
+        ],
+        "2": [
+          1,
+          41,
+          55
+        ],
+        "3": [
+          13,
+          23,
+          55
+        ],
+        "4": "3.10.12",
+        "5": "0.19.0",
+        "8": [
+          2,
+          5
+        ],
+        "12": "0.19.0",
+        "13": "linux-x86_64"
+      }
+    }
+  },
+  "base_lr": {
+    "value": 0.0001
+  },
+  "batch_size": {
+    "value": 80
+  },
+  "checkpoint": {
+    "value": null
+  },
+  "codebook_levels": {
+    "value": 4
+  },
+  "data": {
+    "value": "/data/POP909_images"
+  },
+  "epochs": {
+    "value": 2000
+  },
+  "hidden_channels": {
+    "value": 256
+  },
+  "image_size": {
+    "value": 128
+  },
+  "lambda_adv": {
+    "value": 0.005
+  },
+  "lambda_ce": {
+    "value": 2
+  },
+  "lambda_l1": {
+    "value": 0.2
+  },
+  "lambda_mse": {
+    "value": 0.5
+  },
+  "lambda_perc": {
+    "value": 0.00001
+  },
+  "lambda_spec": {
+    "value": 0.0002
+  },
+  "lambda_vq": {
+    "value": 0.25
+  },
+  "learning_rate": {
+    "value": 0.000158113883008419
+  },
+  "no_grad_ckpt": {
+    "value": false
+  },
+  "no_wandb": {
+    "value": false
+  },
+  "num_downsamples": {
+    "value": 3
+  },
+  "vq_embedding_dim": {
+    "value": 256
+  },
+  "vq_num_embeddings": {
+    "value": 32
+  },
+  "warmup_epochs": {
+    "value": 1000
+  }
+}

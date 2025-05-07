@@ -9,20 +9,21 @@ import numpy as np
 import torch
 import torch.optim as optim
 import torchvision
-from scipy import integrate # this is CPU only ewww
+#from scipy import integrate # this is CPU only ewww
 from torch.utils.data import Dataset, DataLoader
 #from torch.utils.tensorboard import SummaryWriter  # SHH: I prefer wandb to tb
 import wandb
 use_wandb = True
 from torchvision import datasets, transforms
 
-from unet import Unet
 from tqdm.auto import tqdm
 #from dist_metrics import compare_distributions, make_histograms
 from PIL import Image
 from pathlib import Path
 
-from vqvae import VQVAE
+from flocoder.models.unet import Unet
+from flocoder.models.vqvae import VQVAE
+
 import gc
 
 

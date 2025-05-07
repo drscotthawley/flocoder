@@ -25,39 +25,32 @@ class RandomRoll:
     def __repr__(self):
         return f"RandomRoll(max_h_shift={self.max_h_shift}, max_v_shift={self.max_v_shift}, p={self.p})"
 
-
-def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_path=None, is_midi=True, num_workers=8, debug=True):
-    if is_midi: # midi piano roll images
-        train_transforms = transforms.Compose([
+def standard_midi_transforms(image_size=128):
+    """Standard image transformations for training and validation."""
+    return transforms.Compose([
             RandomRoll(), # suitable for MIDI but maybe not photos
             transforms.RandomCrop(image_size), 
             transforms.ToTensor(),
-            #RGBToGrayscale()
-            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+            ])
 
-        val_transforms = transforms.Compose([
-            RandomRoll(),
-            transforms.RandomCrop(image_size), 
-            transforms.ToTensor(),
-            #RGBToGrayscale()
-            #transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-    else: # for regular images, e.g. from Oxford Flowers dataset
-        train_transforms = transforms.Compose([
+def standard_image_transforms(image_size=128):
+    return transforms.Compose([
             transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(15),
             transforms.ToTensor(),
+            # normalization as per ImageNet
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
-        val_transforms = transforms.Compose([
-            transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+
+def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_path=None, is_midi=True, num_workers=8, debug=True):
+    if is_midi: # midi piano roll images
+        train_transforms = standard_transforms(image_size)
+        val_transforms = standard_transforms(image_size)
+    else: # for regular images, e.g. from Oxford Flowers dataset
+        train_transforms = standard_image_transforms(image_size)
+        val_transforms = standard_image_transforms(image_size)
     
     if data_path is None: # fall back to Oxford Flowers dataset
         train_base = datasets.Flowers102(root='./data', split='train', transform=train_transforms, download=True)
@@ -65,7 +58,7 @@ def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_p
         train_dataset = PairDataset(train_base)
         val_dataset = PairDataset(val_base)
     else:
-        # Custom directory handling, e.g. for custom datasets, midi images...
+        # Custom directory handling, e.g. for custom datasets, MIDI images...
         _, all_files = fast_scandir(data_path, ['jpg', 'jpeg', 'png'])
         if debug: 
             print(f"Found {len(all_files)} images in {data_path}")
