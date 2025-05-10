@@ -347,7 +347,6 @@ def main(args):
             }
             wandb.log(log_dict)
 
-        # Save checkpoint
         if (epoch + 1) % 250 == 0 and epoch > 0:
             save_checkpoint(model, epoch, optimizer=optimizer)
 
