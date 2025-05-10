@@ -28,6 +28,7 @@ dependencies = [
     "wandb>=0.15.0",
     "pillow>=9.0.0",
     "torchvision",
+    "scipy>=1.15.3",
     "natten",
 ]
 

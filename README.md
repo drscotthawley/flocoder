@@ -78,14 +78,15 @@ The VQVAE compresses MIDI piano roll images into a quantized latent representati
 This will save checkpoints in the `checkpoints/` directory. Use that checkpoint to pre-encode your data like so... 
 
 ### Pre-Encoding Data (with frozen augmentations)
+Takes about 15 minutes to run on a single GPU.
 ```bash
-python scripts/preencode_data.py --config configs/pop909_config.yaml --checkpoint [your_vqgan_checkpoint.pt]
+python scripts/preencode_data.py --config configs/pop909_config.yaml --vqgan-checkpoint [your_vqgan_checkpoint.pt]
 ```
 
 ### Training the Flow Model
 
 ```bash
-python scripts/train_flow.py --config configs/pop909_config.yaml
+python scripts/train_flow.py --config configs/pop909_config.yaml --vqgan-checkpoint [your_vqgan_checkpoint.pt]
 ```
 
 The flow model operates in the latent space created by the VQVAE encoder.

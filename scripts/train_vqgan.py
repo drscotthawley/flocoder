@@ -24,6 +24,7 @@ from flocoder.models.vqvae import VQVAE
 from flocoder.utils.viz import viz_codebook, viz_codebooks
 from flocoder.training.vqgan_losses import *
 from flocoder.eval.metrics import *
+from flocoder.utils.general import save_checkpoint
 
 
 
@@ -108,26 +109,7 @@ def load_checkpoint_non_frozen(model, checkpoint):
     return model
 
 
-def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", ckpt_dir='checkpoints'):
 
-    # allow up to "keep" checkpoints at any time: Delete all but the last keep-1 checkpoints by timestamp 
-    all_checkpoints = sorted(os.listdir(ckpt_dir), key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)))
-    all_checkpoints = [ckpt for ckpt in all_checkpoints if ckpt.startswith(prefix) and ckpt.endswith('.pt')]
-    for ckpt in all_checkpoints[:-(keep-1)]: # note: all_checkpoints are in ascending order by timestamp
-        os.remove(os.path.join(ckpt_dir, ckpt))
- 
-    ckpt_path = f'{ckpt_dir}/{prefix}.pt' 
-    save_dict = {'model_state_dict': model.state_dict()}
-    if epoch is not None: 
-        ckpt_path.replace('.pt', f'_{epoch}.pt')
-        save_dict['epoch'] = epoch
-    if optimizer is not None:
-        save_dict['optimizer_state_dict'] = optimizer.state_dict()
-        
-    os.makedirs(ckpt_dir, exist_ok=True)
-    torch.save(save_dict, ckpt_path)
-    print(f"Checkpoint saved to {ckpt_path}")
-    return ckpt_path
 
 
 

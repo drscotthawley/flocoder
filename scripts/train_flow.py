@@ -4,17 +4,19 @@
 
 import os
 import re
+import math 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.optim as optim
 import torchvision
 #from scipy import integrate # this is CPU only ewww
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 #from torch.utils.tensorboard import SummaryWriter  # SHH: I prefer wandb to tb
 import wandb
-use_wandb = True
 from torchvision import datasets, transforms
+
+from scipy import integrate # this is CPU-only ewww
 
 from tqdm.auto import tqdm
 #from dist_metrics import compare_distributions, make_histograms
@@ -23,6 +25,8 @@ from pathlib import Path
 
 from flocoder.models.unet import Unet
 from flocoder.models.vqvae import VQVAE
+from flocoder.data.datasets import PreEncodedDataset
+from flocoder.utils.general import save_checkpoint, keep_recent_files
 
 import gc
 
@@ -41,6 +45,7 @@ n_classes = None # updates in main()
 
 
 class EMA:
+    """Exponential Moving Average (EMA) for model parameters."""
     def __init__(self, model, decay=0.99, device=None):
         self.model = model
         self.decay = decay
@@ -81,6 +86,7 @@ class EMA:
 
 
 def euler_sampler(model, shape, sample_N, device):
+    """quick and dirty integration using Euler method; not very accurate"""
     model.eval()
     #cond = torch.arange(10).repeat(shape[0] // 10).to(device) if condition else None
     cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device) # this is for a 10x10 grid of outputs, with one class per column
@@ -95,8 +101,7 @@ def euler_sampler(model, shape, sample_N, device):
             pred = model(x, t * 999, cond)
 
             x = x.detach().clone() + pred * dt
-
-        nfe = sample_N
+        nfe = sample_N # number of function evaluations
         return x.cpu(), nfe
 
 
@@ -109,6 +114,7 @@ def from_flattened_numpy(x, shape):
 
 
 def rk45_sampler(model, shape, device):
+    """Runge-Kutta '4.5' order method for integration. Source: Tadoa Yomaoka"""
     rtol = atol = 1e-05
     model.eval()
     #cond = torch.arange(n_classes).repeat(shape[0] // n_classes).to(device) if condition else None 
@@ -157,7 +163,7 @@ def imshow(img, filename):
     pil_img.save(filename)
 
 
-def save_img_grid(img, epoch, method, nfe, tag=""):
+def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True):
     filename = f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png"
     img_grid = torchvision.utils.make_grid(img, nrow=10)
     #print(f"img.shape = {img.shape}, img_grid.shape = {img_grid.shape}") 
@@ -169,7 +175,7 @@ def save_img_grid(img, epoch, method, nfe, tag=""):
 
 
 @torch.no_grad()
-def eval(model, vqvae, epoch, method, device, sample_N=None, batch_size=100, tag="", images=None):
+def eval(model, vqvae, epoch, method, device, sample_N=None, batch_size=100, tag="", images=None, use_wandb=True):
     model.eval()
     # saves sample generated images, unless images are passed through (target data)
     if images is None:
@@ -180,52 +186,15 @@ def eval(model, vqvae, epoch, method, device, sample_N=None, batch_size=100, tag
     else:
         nfe=0
     #save_img_grid(images, f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png")
-    decoded_images = vqvae.decode(vqvae.expand(images.to(vqvae.device))).cpu()
-    save_img_grid(images, epoch, method, nfe, tag=tag)
-    save_img_grid(decoded_images, epoch, method, nfe, tag=tag+"decoded_")
+    decoded_images = vqvae.decode(images.to(vqvae.device)).cpu()
+    save_img_grid(images, epoch, method, nfe, tag=tag, use_wandb=use_wandb)
+    save_img_grid(decoded_images, epoch, method, nfe, tag=tag+"decoded_", use_wandb=use_wandb)
     return model.train()
 
 
-def keep_recent_files(n=5, directory='checkpoints', pattern='*.pt'):
-    # delete all but the n most recent checkpoints/images (so the disk doesn't fill!)
-    # default kwarg values guard
-    files = sorted(Path(directory).glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
-    for f in files[n:]:
-        f.unlink()
 
 
-class VQEncodedDataset(Dataset):
-    def __init__(self, data_dir="/data/encoded-POP909"):
-        self.data_dir = Path(data_dir)
-        self.files = list(self.data_dir.glob("*.pt"))
 
-        # Extract class number from first file to determine number of classes
-        sample_file = self.files[0].name
-        pattern = re.compile(r'.*_(\d+)_.*\.pt')
-
-        # Get all unique class numbers to determine total number of classes
-        self.class_numbers = set()
-        for f in self.files:
-            match = pattern.match(f.name)
-            if match:
-                self.class_numbers.add(int(match.group(1)))
-
-        self.n_classes = len(self.class_numbers)
-        print(f"Found {len(self.files)} encoded samples across {self.n_classes} classes")
-
-    def __len__(self):
-        return len(self.files)
-
-    def __getitem__(self, idx):
-        file_path = self.files[idx]
-
-        class_num = 0
-
-        # Load encoded tensor to CPU and detach from computation graph
-        encoded = torch.load(file_path, map_location='cpu',weights_only=True)
-        encoded = encoded.detach().requires_grad_(False)
-
-        return encoded, class_num
 
 def warp_time(t, dt=None, s=.5):
     """Parametric Time Warping: s = slope in the middle.
@@ -237,13 +206,13 @@ def warp_time(t, dt=None, s=.5):
         return tw,  dt * 12*(1-s)*t**2 + 12*(s-1)*t + (3-2*s)
     return tw
 
-def main():
+
+def train_flow(args):
     global n_classes 
 
-    print("WIP WARNING: This training code is being refactored from an older, messier repo and may not yet work. Please stay tuned...")
-
-    os.makedirs(f"output_midi-vq-{H}x{W}", exist_ok=True)
-    dataset = VQEncodedDataset("/data/encoded-POP909")
+    output_dir = f"output_midi-vq-{H}x{W}"
+    os.makedirs(output_dir, exist_ok=True)
+    dataset = PreEncodedDataset("/data/encoded-POP909")
     n_classes = 0
     train_dataloader = DataLoader(
         dataset=dataset,
@@ -258,30 +227,39 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device=",device)
 
-    # Set VQVAE parameters
-    hidden_channels = 256
-    num_downsamples = 3
-    vq_num_embeddings = 32
-    vq_embedding_dim = 256
-    codebook_levels = 4
-    compressed_dim = 4
-    no_grad_ckpt=False
+    # # Set VQVAE parameters
+    # hidden_channels = 256
+    # num_downsamples = 3
+    # vq_num_embeddings = 32
+    # vq_embedding_dim = 256
+    # codebook_levels = 4
+    # compressed_dim = 4
+    # no_grad_ckpt=False
+    print("creating VQVAE model...")
 
-    # Initialize VQVAE
+    # Initialize VQVAE - we'll only use the decoder for viz & eval, since our data is pre-encoded
     vqvae = VQVAE(
         in_channels=3,
-        hidden_channels=hidden_channels,
-        num_downsamples=num_downsamples,
-        vq_num_embeddings=vq_num_embeddings,
-        vq_embedding_dim=vq_embedding_dim,
-        compressed_dim=compressed_dim,
-        codebook_levels=codebook_levels,
-        use_checkpoint=not no_grad_ckpt,# this refers to gradient checkpointing
+        hidden_channels=args.hidden_channels,
+        num_downsamples=args.num_downsamples,
+        vq_num_embeddings=args.vq_num_embeddings,
+        vq_embedding_dim=args.vq_embedding_dim,
+        compressed_dim=args.compressed_dim,
+        codebook_levels=args.codebook_levels,
+        use_checkpoint=not args.no_grad_ckpt,# this refers to gradient checkpointing
         no_natten=False,
     ).eval()
 
-    vqvae_cp_file = "midi_vqvae_latest.pt"
-    checkpoint = torch.load(vqvae_cp_file, map_location=device, weights_only=True)
+    print("vqvae model created")
+
+
+    # TODO: consistent use of either VQVAE or VQGAN
+    vqgan_ckpt_file =args.vqgan_checkpoint #  "midi_vqvae_latest.pt"
+    if not os.path.exists(vqgan_ckpt_file):
+        raise FileNotFoundError(f"VQGAN checkpoint file {vqgan_ckpt_file} not found.")
+    else:
+        print(f"Loading VQGAN checkpoint from {vqgan_ckpt_file}")
+    checkpoint = torch.load(vqgan_ckpt_file, map_location=device, weights_only=True)
     vqvae.load_state_dict(checkpoint['model_state_dict'])
     vqvae.to(device)
     vqvae.device = device
@@ -302,7 +280,7 @@ def main():
     #print("model checkpoint loaded")
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
+    use_wandb = not args.no_wandb
     if use_wandb: wandb.init(project=f"TadaoY-midi-VQ-{H}x{W}")
 
     ema = EMA(model, decay=0.999, device=device)
@@ -358,30 +336,143 @@ def main():
         if epoch < 5 or (epoch + 1) % 10 == 0: # evals every 1 at beginning, then every 20 later
             print("Generating sample outputs...")
             images = batch[:100].cpu()
-            #eval(model, epoch, "euler", device, sample_N=1)
-            #eval(model, epoch, "euler", device, sample_N=2)
-            #eval(model, epoch, "euler", device, sample_N=10)
             batch, score, target = None, None, None
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval(model, vqvae, epoch, "target_data", device, tag="", images=images)
-            eval(model, vqvae, epoch, "rk45", device, tag="")
+            eval(model, vqvae, epoch, "target_data", device, tag="", images=images, use_wandb=use_wandb)
+            eval(model, vqvae, epoch, "rk45", device, tag="", use_wandb=use_wandb)
             ema.eval()
-            eval(model, vqvae, epoch, "rk45", device, tag="ema_")
+            eval(model, vqvae, epoch, "rk45", device, tag="ema_", use_wandb=use_wandb)
             ema.train()
 
         if (epoch + 1) % 25 == 0: # checkpoint every 100
-            print("Saving checkpoint...")
-            directory = f"output_midi-vq-{H}x{W}"
-            torch.save( model.state_dict(), os.path.join(directory, f"model_epoch_{epoch + 1}.pt"),)
+            save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flow_", ckpt_dir=f"checkpoints")
+            
+            #torch.save( model.state_dict(), os.path.join(directory, f"model_epoch_{epoch + 1}.pt"),)
             # Save EMA weights
             ema.eval()  # Switch to EMA weights
-            torch.save( model.state_dict(),  # Now contains EMA weights
-                os.path.join(directory, f"model_ema_epoch_{epoch + 1}.pt"))
+            #torch.save( model.state_dict(),  # Now contains EMA weights
+            #    os.path.join(directory, f"model_ema_epoch_{epoch + 1}.pt"))
+            save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flowema_", ckpt_dir=f"checkpoints")
+
             ema.train()  # Switch back to regular weights
-            keep_recent_files(10, directory=directory, pattern="*.pt") # occasionally clean up the disk
-            keep_recent_files(100, directory=directory, pattern="*.png")
+            #keep_recent_files(10, directory=directory, pattern="*.pt") # occasionally clean up the disk
+            keep_recent_files(100, directory=output_dir, pattern="*.png") # not too many image outputs
 
 
-if __name__ == "__main__":
-    main()
+
+def parse_args_with_config():
+    """
+    This lets you specify args via a YAML config file and/or override those with command line args.
+    i.e. CLI args take precedence 
+    """
+    import argparse
+    import yaml 
+
+    # First pass to check for config file
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
+    args, _ = parser.parse_known_args()
+    
+    # Load config file if provided
+    if args.config:
+        with open(args.config, 'r') as f:
+            yaml_config_full = yaml.safe_load(f)
+        
+        config = {}  # Initialize config
+        
+        # Add global data if it exists
+        if 'data' in yaml_config_full:
+            config["data"] = yaml_config_full['data']
+        
+        # Process sections
+        sections_to_process = ['vqgan', 'preencoding', 'flow'] # note later items overwrite earlier ones
+        for section in sections_to_process:
+            if section in yaml_config_full:
+                section_params = yaml_config_full[section]
+                
+                # Flatten the nested structure
+                for key, value in section_params.items():
+                    if isinstance(value, dict):
+                        # This is where the flattening happens for nested dicts
+                        for subkey, subvalue in value.items():
+                            config[subkey.replace('_', '-')] = subvalue
+                    else:
+                        config[key.replace('_', '-')] = value
+        
+        print("Flattened config from file:", config)
+    
+    # Create full parser with config-based defaults
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    
+    # Add config option
+    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
+    
+    # Training parameters with config-based defaults
+    parser.add_argument('--batch-size', type=int, default=config.get('batch-size', 32), 
+                       help='the batch size')
+    parser.add_argument('--data', type=str, 
+                       default=config.get('data', None)+"_encoded", 
+                       help='path to top-level-directory containing custom image data')
+    parser.add_argument('--epochs', type=int, 
+                       default=config.get('num-epochs', 1000000), 
+                       help='number of epochs')
+    parser.add_argument('--base-lr', type=float, 
+                       default=config.get('learning-rate', 1e-4), 
+                       help='base learning rate for batch size of 32')
+    parser.add_argument('--image-size', type=int, 
+                       default=config.get('image-size', 128), 
+                       help='will rescale images to squares of (image-size, image-size)')
+    parser.add_argument('--load-checkpoint', type=str, 
+                       default=config.get('load-checkpoint', None), 
+                       help='path to load checkpoint to resume training from')
+    
+    # vq parameters
+    parser.add_argument('--vqgan-checkpoint', type=str, 
+                       default=config.get('vqgan-checkpoint', None), 
+                       help='path to load vqvgan checkpoint to resume training from')
+    # TODO: vqgan model params should be included in checkpoint file. 
+    parser.add_argument('--hidden-channels', type=int, 
+                       default=config.get('hidden-channels', 256))
+    parser.add_argument('--num-downsamples', type=int, 
+                       default=config.get('num-downsamples', 3), 
+                       help='total downsampling is 2**[this]')
+    parser.add_argument('--vq-num-embeddings', type=int, 
+                       default=config.get('vq-num-embeddings', 32), 
+                       help='aka codebook length')
+    parser.add_argument('--vq-embedding-dim', type=int, 
+                       default=config.get('vq-embedding-dim', 256), 
+                       help='pre-vq emb dim before compression')
+    parser.add_argument('--compressed-dim', type=int, 
+                       default=config.get('compressed-dim', 4), 
+                       help='ACTUAL dims of codebook vectors')
+    parser.add_argument('--codebook-levels', type=int, 
+                       default=config.get('codebook-levels', 4), 
+                       help='number of RVQ levels')
+    parser.add_argument('--commitment-weight', type=float, 
+                       default=config.get('commitment-weight', 0.5), 
+                       help='VQ commitment weight, aka quantization strength')
+    parser.add_argument('--no-wandb', action='store_true', help='disable wandb logging')
+    parser.add_argument('--project-name', type=str, 
+                       default=config.get('project-name', "vqgan-midi"), 
+                       help='WandB project name')
+    parser.add_argument('--run-name', type=str, 
+                       default=config.get('run-name', None), 
+                       help='WandB run name')
+    parser.add_argument('--no-grad-ckpt', action='store_true', 
+                       help='disable gradient checkpointing')
+    
+    # Parse args
+    args = parser.parse_args()
+    
+    # Calculate learning rate based on batch size
+    args.learning_rate = args.base_lr * math.sqrt(args.batch_size / 32)
+    args.data = os.path.expanduser(args.data)
+    
+    return args
+
+
+if __name__ == '__main__':
+    args = parse_args_with_config()
+    print("args = ",args)
+    train_flow(args)

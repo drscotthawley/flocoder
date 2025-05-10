@@ -14,6 +14,7 @@ vqgan:
         compressed_dim: 4
         codebook_levels: 4
         commitment-weight: 0.5
+        no_grad_ckpt: False 
     
     # training specific to VQGAN
     training:
@@ -46,6 +47,7 @@ preencoding:
     num_workers: 8
     max_storage_gb: 50
     augs_per: 512
+    vqgan_checkpoint: "checkpoints/final_vqgan_epoch9999.pt"
 
 
 flow: 

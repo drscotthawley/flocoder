@@ -1,7 +1,9 @@
 import os
+import re
 from pathlib import Path
 from PIL import Image
 import random
+import torch 
 from torch.utils.data import Dataset, IterableDataset
 
 from torchvision import datasets
@@ -191,6 +193,43 @@ class InfiniteDataset(IterableDataset):
             idx = random.randint(0, self.actual_len - 1)
             # Get the item from the base dataset
             yield self.dataset[idx]
+
+
+
+class PreEncodedDataset(Dataset):
+    """for data pre-encoded by the Encoder of the VQVAE model"""
+    def __init__(self, data_dir="/data/encoded-POP909"):
+        self.data_dir = Path(data_dir)
+        self.files = list(self.data_dir.glob("*.pt"))
+
+        # Extract class number from first file to determine number of classes
+        sample_file = self.files[0].name
+        pattern = re.compile(r'.*_(\d+)_.*\.pt')
+
+        # Get all unique class numbers to determine total number of classes
+        self.class_numbers = set()
+        for f in self.files:
+            match = pattern.match(f.name)
+            if match:
+                self.class_numbers.add(int(match.group(1)))
+
+        self.n_classes = len(self.class_numbers)
+        print(f"Found {len(self.files)} encoded samples across {self.n_classes} classes")
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        file_path = self.files[idx]
+
+        class_num = 0 # TODO: include class or other conditioning/label info
+
+        # Load encoded tensor to CPU and detach from computation graph
+        encoded = torch.load(file_path, map_location='cpu',weights_only=True)
+        encoded = encoded.detach().requires_grad_(False)
+
+        return encoded, class_num
+
 
 
 # for testing 

@@ -217,8 +217,7 @@ def parse_args_with_config():
         with open(args.config, 'r') as f:
             yaml_config_full = yaml.safe_load(f)
         
-        # Initialize config
-        config = {}
+        config = {}  # Initialize config
         
         # Add global data if it exists
         if 'data' in yaml_config_full:
@@ -258,8 +257,9 @@ def parse_args_with_config():
                       help='size to resize images to')
     parser.add_argument('--batch_size', type=int, default=config.get('batch-size', None),
                       help='batch size for processing')
-    parser.add_argument('--checkpoint', default="vqvae_checkpoint_compressed4_epoch1500.pt",
-                      help='path to VQVAE checkpoint file')
+    parser.add_argument('--vqgan-checkpoint', type=str, 
+                       default=config.get('vqgan-checkpoint', None), 
+                       help='path to load vqvgan checkpoint to resume training from')
     parser.add_argument('--no_grad_ckpt', action='store_true',
                       help='disable gradient checkpointing')
     
@@ -320,8 +320,8 @@ def preencode_data():
     vqvae = vqvae.to(device)
     vqvae.device = device
 
-    print(f"Loading VQVAE checkpoint from {args.checkpoint}")
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True)
+    print(f"Loading VQVAE checkpoint from {args.vqgan_checkpoint}")
+    checkpoint = torch.load(args.vqgan_checkpoint, map_location=device, weights_only=True)
     vqvae.load_state_dict(checkpoint['model_state_dict'])
     print("VQVAE checkpoint loaded successfully")
     
