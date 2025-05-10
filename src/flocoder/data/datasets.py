@@ -2,7 +2,8 @@ import os
 from pathlib import Path
 from PIL import Image
 import random
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
+
 from torchvision import datasets
 from multiprocessing import Pool, cpu_count, set_start_method
 from functools import partial
@@ -73,7 +74,6 @@ class ImageListDataset(Dataset):
     def __init__(self, 
                  file_list,      # list of image file paths, e.g. from fast_scandir
                  transform=None, # can specify transforms manually, i.e. outside of dataloader. but usually we let the dataloader do transforms
-                 finite=True,    # if false, it will randomly sample from the dataset indefinitely
                  split='all',       # 'train', 'val', or 'all'
                  val_ratio=0.1,  # percentage for validation
                  seed=42,        # for reproducibility 
@@ -94,12 +94,11 @@ class ImageListDataset(Dataset):
         self.actual_len = len(self.files)
         self.images = [None]*self.actual_len
         self.transform = transform
-        self.finite = finite
         if debug:
             print(f"Dataset contains {self.actual_len} images")
         
     def __len__(self):
-        return self.actual_len if self.finite else 9_999_999_999  # big number
+        return self.actual_len 
         
     def __getitem__(self, idx):
         actual_idx = idx % self.actual_len  # Use modulo to wrap around the index
@@ -121,7 +120,6 @@ class MIDIImageDataset(ImageListDataset):
                  split='all',       # 'train', 'val', or 'all'
                  val_ratio=0.1,  # percentage for validation
                  seed=42,        # for reproducibility 
-                 finite=True,    # if false, it will randomly sample from the dataset indefinitely
                  skip_versions=True, # if true, it will skip the extra versions of the same song
                  total_only=True, # if true, it will only keep the "_TOTAL_" version of each song
                  download=True, # if true, it will download the datase -- leave this on for now
@@ -158,7 +156,7 @@ class MIDIImageDataset(ImageListDataset):
         if debug: print(f"len(midi_img_file_list): {len(self.midi_img_file_list)}")
 
         super().__init__(self.midi_img_file_list, transform=transform, 
-                         split=split, val_ratio=val_ratio, seed=seed, finite=finite, debug=debug)
+                         split=split, val_ratio=val_ratio, seed=seed, debug=debug)
  
     def convert_one(self, midi_file, debug=True):
         if debug: print(f"Converting {midi_file} to image")
@@ -171,6 +169,28 @@ class MIDIImageDataset(ImageListDataset):
         num_cpus = cpu_count()
         with Pool(num_cpus) as p:
             list(tqdm(p.imap(process_one, self.midi_files), total=len(self.midi_files), desc='Processing MIDI files'))
+
+
+
+class InfiniteDataset(IterableDataset):
+    """ This is a wrapper around a dataset that allows for infinite iteration.
+        It randomly samples from the base dataset indefinitely.
+        e.g. 
+        base_dataset = MIDIImageDataset(transform=transform)
+        dataset = InfiniteImageDataset(base_dataset)
+    """
+    def __init__(self, base_dataset, shuffle=True):
+        super().__init__()
+        self.dataset = base_dataset
+        self.actual_len = len(self.dataset)
+        assert shuffle, "InfiniteDataset only supports shuffle=True for now"
+    
+    def __iter__(self):
+        while True:
+            # Generate a random index
+            idx = random.randint(0, self.actual_len - 1)
+            # Get the item from the base dataset
+            yield self.dataset[idx]
 
 
 # for testing 

@@ -17,7 +17,7 @@ vqgan:
     
     # training specific to VQGAN
     training:
-        batch_size: 80
+        batch_size: 32
         learning_rate: 1e-3
         num_epochs: 10000
     
@@ -41,8 +41,11 @@ vqgan:
 
 
 preencoding: 
+    # the encoder is the bottleneck, so for speed, don't make batch_size too big or use too many workers
     batch_size: 32
-    augmentations_per_image: 512
+    num_workers: 8
+    max_storage_gb: 50
+    augs_per: 512
 
 
 flow: 
