@@ -281,7 +281,7 @@ def train_flow(args):
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     use_wandb = not args.no_wandb
-    if use_wandb: wandb.init(project=f"TadaoY-midi-VQ-{H}x{W}")
+    if use_wandb: wandb.init(project=args.project_name, name=args.run_name)
 
     ema = EMA(model, decay=0.999, device=device)
 
