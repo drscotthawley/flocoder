@@ -132,7 +132,7 @@ def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", c
 
 
 
-def main(args):
+def train_vqgan(args):
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
@@ -153,15 +153,13 @@ def main(args):
         use_checkpoint=not args.no_grad_ckpt,
     ).to(device)
 
-    # vgg is used for perceptual loss
-    vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
-    for param in vgg.parameters():
-        param.requires_grad = False
-    
-
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
     scheduler = None # optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.learning_rate, total_steps=args.epochs)
-    
+
+    # vgg is used for perceptual loss part of adversarial training
+    vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
+    for param in vgg.parameters():
+        param.requires_grad = False    
     adv_loss = AdversarialLoss(device, use_checkpoint=not args.no_grad_ckpt).to(device)
     d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), 
                             lr=args.learning_rate * 0.1, 
@@ -182,8 +180,6 @@ def main(args):
     if not args.no_wandb:
         wandb.init(project=args.project_name, name=args.run_name)
         wandb.config.update(vars(args))
-
-    os.makedirs('checkpoints', exist_ok=True)
 
     # Main training loop
     for epoch in range(start_epoch, args.epochs):
@@ -276,7 +272,7 @@ def main(args):
 
         # Validation phase
         with torch.no_grad():
-            # do some gpu vram garbage collection? 
+            # TODO: maybe do some gpu vram garbage collection? 
             model.eval()
             val_losses = defaultdict(float)
             val_total_batches = 0
@@ -322,20 +318,15 @@ def main(args):
                         
                         viz_images = torch.cat([orig, recon])
                         caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
-                        
                         log_dict['demo/examples'] = wandb.Image(
                             make_grid(viz_images, nrow=8, normalize=True),
-                            caption=caption
-                        )
-
+                            caption=caption)
                         wandb.log(log_dict)
 
         # Compute average validation losses
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
-        # Visualize codebooks periodically
-        if epoch % 1 == 0:
-            viz_codebooks(model, args, epoch)
+        if epoch % 1 == 0: viz_codebooks(model, args, epoch)
 
         # Log epoch metrics
         if not args.no_wandb:
@@ -484,4 +475,4 @@ def parse_args_with_config():
 if __name__ == '__main__':
     args = parse_args_with_config()
     print("args = ",args)
-    main(args)
+    train_vqgan(args)
