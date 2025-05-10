@@ -40,6 +40,11 @@ vqgan:
         # run_name: "best to set via CLI"
 
 
+preencoding: 
+    batch_size: 32
+    augmentations_per_image: 512
+
+
 flow: 
     # Parameters specific to flow model.
     # note: any encoding/decoding/visualization will likely read from the VQGAN section above
