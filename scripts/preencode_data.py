@@ -23,6 +23,7 @@ def generate_random_string(length=6):
 
 
 class PreEncoder:
+    # TODO: only reason this is a class is because Claude wanted to do it that way and I didn't resist. -SHH
     def __init__(self, vqvae, output_dir, image_size=128, max_storage_gb=10):
         self.vqvae = vqvae
         self.output_dir = Path(output_dir)
@@ -124,7 +125,11 @@ def parse_args_with_config():
     config = {}
     if args.config:
         with open(args.config, 'r') as f:
-            yaml_config = yaml.safe_load(f)
+            yaml_config_full = yaml.safe_load(f)
+        if 'vqgan' in yaml_config_full: # grab just the vqgan section
+            yaml_config = yaml_config_full['vqgan']
+        if 'data' in yaml_config_full:
+            yaml_config["data"] = yaml_config_full['data'] 
         
         # Flatten nested structure, and treat config variable names as CLI args
         for section, params in yaml_config.items():
@@ -138,7 +143,7 @@ def parse_args_with_config():
     parser.add_argument('--data', type=str, 
                        default=config.get('data', None), 
                        help='path to top-level-directory containing custom image data')
-    parser.add_argument('--output_dir', default='/data/encoded-POP909/',
+    parser.add_argument('--output_dir', default=None,
                       help='directory to save encoded tensors')
     parser.add_argument('--max_storage_gb', type=float, default=50,
                       help='maximum storage to use in gigabytes')
@@ -174,6 +179,10 @@ def parse_args_with_config():
                        default=config.get('commitment-weight', 0.5), 
                        help='VQ commitment weight, aka quantization strength')
     args = parser.parse_args()
+    
+    if args.output_dir is None:
+        args.output_dir = os.path.join(args.data, '_encoded')
+        
     return args 
 
 
