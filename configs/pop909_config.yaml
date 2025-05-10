@@ -1,7 +1,11 @@
-# POP909 MIDI dataset
-data: "pop909"
+# POP909 MIDI dataset. If it's not present, then it will be downloaded & set up
+data: "~/datasets/POP909_images"
 
-vqgan: 
+vqgan:
+    # Parameters specific to VQGAN 
+    # Note: the following sub-hierarchy is (i.e., model:, training:) 
+    #     is not required; in fact it gets flattened.
+    # Only used for user readability
     model:
         hidden_channels: 256
         num_downsamples: 3
@@ -11,14 +15,17 @@ vqgan:
         codebook_levels: 4
         commitment-weight: 0.5
     
+    # training specific to VQGAN
     training:
         batch_size: 80
         learning_rate: 1e-3
         num_epochs: 10000
     
         epochs: 100000
+        # base learning rate gets scaled by the batch size
         base_lr: 1e-4
         image_size: 128
+        # warmup is before the adversarial training starts
         warmup_epochs: 15
         # regularization parameters
         lambda_adv: 0.03
@@ -30,5 +37,26 @@ vqgan:
 
     wandb: 
         project_name: "flocoder-vqgan"
-    # run name
-    # no_grad_ckpt
+        # run_name: "best to set via CLI"
+
+
+flow: 
+    # Parameters specific to flow model.
+    # note: any encoding/decoding/visualization will likely read from the VQGAN section above
+    model: 
+        num_layers: 8
+        num_blocks: 4
+        num_heads: 8
+        num_channels: 256
+        num_residuals: 2
+        # can add more later
+    training: 
+        batch_size: 4096
+        learning_rate: 1e-4
+        num_epochs: 10000
+        # can add more later 
+
+    wandb:
+        project_name: "flocoder-flow"
+        # run_name: "best to set via CLI"
+
