@@ -108,6 +108,19 @@ def load_checkpoint_non_frozen(model, checkpoint):
     return model
 
 
+def save_checkpoint(model, optimizer, epoch, keep=5, ckpt_dir='checkpoints'):
+    # allow up to "keep" checkpoints at any time: Delete all but the last keep-1 checkpoints by timestamp 
+    all_checkpoints = sorted(os.listdir(ckpt_dir), key=lambda x: os.path.getmtime(os.path.join(ckpt_dir, x)))
+    for ckpt in all_checkpoints[:-(keep-1)]: # note: all_checkpoints are in ascending order
+        os.remove(os.path.join(ckpt_dir, ckpt))
+
+    ckpt_path = f'{ckpt_dir}/vqgan_epoch{epoch}.pt'
+    print(f"Saving checkpoint to {ckpt_path}")
+    torch.save({ 'epoch': epoch, 'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),  }, ckpt_path)
+    return ckpt_path
+
+
 
 
 def main(args):
@@ -246,10 +259,7 @@ def main(args):
 
             # Collect batch metrics for logging
             if not args.no_wandb:
-                log_dict = {
-                    'epoch': epoch,
-                    **{f'batch/{k}_loss': v for k, v in batch_losses.items()}
-                }
+                log_dict = {  'epoch': epoch,  **{f'batch/{k}_loss': v for k, v in batch_losses.items()} }
                 wandb.log(log_dict)
 
         # Compute average training losses
@@ -330,13 +340,8 @@ def main(args):
 
         # Save checkpoint
         if (epoch + 1) % 250 == 0 and epoch > 0:
-            ckpt_path = f'checkpoints/model_epoch{epoch}.pt'
-            print(f"Saving checkpoint to {ckpt_path}")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-            }, ckpt_path)
+            save_checkpoint(model, optimizer, epoch)
+            print(f"Checkpoint saved at epoch {epoch}")
 
         if scheduler:
             scheduler.step()
