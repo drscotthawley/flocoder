@@ -71,19 +71,20 @@ The package includes several training scripts located in the `scripts/` director
 (terminology note: VQGAN = VQVAE + attention + adversarial loss. We use VQGAN/VQVAE somewhat interchangeably.)
 
 ```bash
-# Train the VQVAE model
 python scripts/train_vqgan.py --config configs/pop909_config.yaml
 ```
 
 The VQVAE compresses MIDI piano roll images into a quantized latent representation.
+This will save checkpoints in the `checkpoints/` directory. Use that checkpoint to pre-encode your data like so... 
 
-### Pre-Encode Data 
-...
+### Pre-Encoding Data (with frozen augmentations)
+```bash
+python scripts/preencode_data.py --config configs/pop909_config.yaml --checkpoint [your_vqgan_checkpoint.pt]
+```
 
 ### Training the Flow Model
 
 ```bash
-# Train the flow matching model
 python scripts/train_flow.py --config configs/pop909_config.yaml
 ```
 
