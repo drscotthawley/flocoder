@@ -159,19 +159,7 @@ class MIDIImageDataset(ImageListDataset):
 
         super().__init__(self.midi_img_file_list, transform=transform, 
                          split=split, val_ratio=val_ratio, seed=seed, finite=finite, debug=debug)
-        return 
-    
-
-        file_list = []
-        # TODO: More code goes here. 
-
-        # Now instantiate parent class
-
-        # next few lines are redundant since parent class already does this
-        # self.file_list = file_list
-        # self.actual_len = len(self.file_list)
-        # self.images = [None]*self.actual_len   
-        # 
+ 
     def convert_one(self, midi_file, debug=True):
         if debug: print(f"Converting {midi_file} to image")
         midi_to_pr_img(midi_file, self.midi_img_dir, show_chords=False, all_chords=None, 
