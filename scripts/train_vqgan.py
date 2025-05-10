@@ -362,9 +362,14 @@ def parse_args_with_config():
     config = {}
     if args.config:
         with open(args.config, 'r') as f:
-            yaml_config = yaml.safe_load(f)
+            yaml_config_full = yaml.safe_load(f)
         
-        # Flatten nested structure, and treat config variable names as CLI args
+        # grab only the "data" and the "vqgan" sections if the exists, and flatten the result 
+        if 'vqgan' in yaml_config_full:
+            yaml_config = yaml_config_full['vqgan']
+        if 'data' in yaml_config_full:
+            yaml_config["data"] = yaml_config_full['data'] 
+        # Flatten any further nested structure, and treat config variable names as CLI args
         for section, params in yaml_config.items():
             if isinstance(params, dict):
                 for key, value in params.items():

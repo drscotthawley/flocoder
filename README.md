@@ -72,16 +72,19 @@ The package includes several training scripts located in the `scripts/` director
 
 ```bash
 # Train the VQVAE model
-python scripts/train_vqgan.py --config configs/vqgan_config.yaml
+python scripts/train_vqgan.py --config configs/pop909_config.yaml
 ```
 
 The VQVAE compresses MIDI piano roll images into a quantized latent representation.
+
+### Pre-Encode Data 
+...
 
 ### Training the Flow Model
 
 ```bash
 # Train the flow matching model
-python scripts/train_flow.py --config configs/flow_config.yaml
+python scripts/train_flow.py --config configs/pop909_config.yaml
 ```
 
 The flow model operates in the latent space created by the VQVAE encoder.

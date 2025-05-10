@@ -74,8 +74,23 @@ class ImageListDataset(Dataset):
                  file_list,      # list of image file paths, e.g. from fast_scandir
                  transform=None, # can specify transforms manually, i.e. outside of dataloader. but usually we let the dataloader do transforms
                  finite=True,    # if false, it will randomly sample from the dataset indefinitely
+                 split='all',       # 'train', 'val', or 'all'
+                 val_ratio=0.1,  # percentage for validation
+                 seed=42,        # for reproducibility 
                  debug=True):
         self.files = file_list
+        # Apply split if needed
+        if split != 'all' and len(file_list) > 0:
+            random.seed(seed)  # For reproducibility
+            all_files = file_list.copy()  # Make a copy to avoid modifying the original
+            random.shuffle(all_files)
+            split_idx = int(len(all_files) * (1 - val_ratio))
+            
+            if split == 'train':
+                self.files = all_files[:split_idx]
+            else:  # 'val'
+                self.files = all_files[split_idx:]
+
         self.actual_len = len(self.files)
         self.images = [None]*self.actual_len
         self.transform = transform
@@ -103,12 +118,16 @@ class MIDIImageDataset(ImageListDataset):
                  root=Path.home() / "datasets",  # root directory for the MIDI part of the dataset
                  url = "https://github.com/music-x-lab/POP909-Dataset/raw/refs/heads/master/POP909.zip", # url for downloading the dataset
                  transform=None, # can specify transforms manually, i.e. outside of dataloader
+                 split='all',       # 'train', 'val', or 'all'
+                 val_ratio=0.1,  # percentage for validation
+                 seed=42,        # for reproducibility 
                  finite=True,    # if false, it will randomly sample from the dataset indefinitely
                  skip_versions=True, # if true, it will skip the extra versions of the same song
                  total_only=True, # if true, it will only keep the "_TOTAL_" version of each song
+                 download=True, # if true, it will download the datase -- leave this on for now
                  debug=False):
         
-        datasets.utils.download_and_extract_archive(url, download_root=root)
+        if download: datasets.utils.download_and_extract_archive(url, download_root=root)
         download_dir = root / url.split("/")[-1].replace(".zip", "")
         self.midi_files = fast_scandir(download_dir, ['mid', 'midi'])[1]
         if not self.midi_files or len(self.midi_files) == 0:
@@ -138,7 +157,8 @@ class MIDIImageDataset(ImageListDataset):
             self.midi_img_file_list = [f for f in self.midi_img_file_list if '_TOTAL' in f]
         if debug: print(f"len(midi_img_file_list): {len(self.midi_img_file_list)}")
 
-        super().__init__(self.midi_img_file_list, transform, finite, debug)
+        super().__init__(self.midi_img_file_list, transform=transform, 
+                         split=split, val_ratio=val_ratio, seed=seed, finite=finite, debug=debug)
         return 
     
 
