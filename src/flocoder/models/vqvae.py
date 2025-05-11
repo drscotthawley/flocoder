@@ -208,7 +208,7 @@ class NoiseInjection(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
-                 vq_embedding_dim=256, inject_noise=True, use_checkpoint=False,
+                 internal_dim=256, inject_noise=True, use_checkpoint=False,
                  init_layers = []):
         super().__init__()
         
@@ -217,8 +217,8 @@ class Decoder(nn.Module):
         # projection
         current_channels = hidden_channels * (2 ** (num_downsamples - 1))
         next_layers = [
-            SpatialNonLocalAttention(vq_embedding_dim),
-            nn.Conv2d(vq_embedding_dim, current_channels, 1),
+            SpatialNonLocalAttention(internal_dim),
+            nn.Conv2d(internal_dim, current_channels, 1),
             NoiseInjection(current_channels), # note NoiseInjection defaults to a no-op; only here for playing with later
             EncDecResidualBlock(current_channels, current_channels, 
                               use_checkpoint=use_checkpoint, attention='full')
@@ -338,8 +338,8 @@ class SpatialNonLocalAttention(nn.Module):
 
 class VQVAE(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
-                 vq_num_embeddings=512, vq_embedding_dim=128, codebook_levels=3, 
-                 compressed_dim=4, commitment_weight=0.25,
+                 vq_num_embeddings=512, internal_dim=256, codebook_levels=3, 
+                 vq_embedding_dim=4, commitment_weight=0.25,
                  use_checkpoint=False, no_natten=False):
         super().__init__()
         global natten 
@@ -366,25 +366,25 @@ class VQVAE(nn.Module):
                                 stride=1, use_checkpoint=use_checkpoint, attention=attention))
             in_channels_current = out_channels
                 
-        encoder_layers.append(EncDecResidualBlock(in_channels_current, vq_embedding_dim, 
+        encoder_layers.append(EncDecResidualBlock(in_channels_current, internal_dim, 
                             stride=1, use_checkpoint=use_checkpoint, attention=attention))
-        encoder_layers.append(nn.Conv2d(vq_embedding_dim, vq_embedding_dim, 1)) # final conv2d undoes swish at end of EncDecResidualBlock
+        encoder_layers.append(nn.Conv2d(internal_dim, internal_dim, 1)) # final conv2d undoes swish at end of EncDecResidualBlock
         
         # added this extra set of compression layers
         compress_layers = [
-            nn.Conv2d(vq_embedding_dim, compressed_dim, 1),  # Compress to 8 dimensions
-            nn.GroupNorm(2, compressed_dim),
+            nn.Conv2d(internal_dim, vq_embedding_dim, 1),  # Compress to 8 dimensions
+            nn.GroupNorm(2, vq_embedding_dim),
             nn.SiLU(),
-            nn.Conv2d(compressed_dim, compressed_dim, 3, padding=1)]
+            nn.Conv2d(vq_embedding_dim, vq_embedding_dim, 3, padding=1)]
         encoder_layers.extend(compress_layers)
-        encoder_layers.append(SpatialNonLocalAttention(compressed_dim)) 
+        encoder_layers.append(SpatialNonLocalAttention(vq_embedding_dim)) 
         self.encoder = nn.Sequential(*encoder_layers)
         self.info = None
 
 
         # Vector Quantizer
         # self.vq = VectorQuantize( # non-residual VQ. 
-        #     dim=vq_embedding_dim,
+        #     dim=internal_dim,
         #     codebook_size=vq_num_embeddings,
         #     decay=0.95,
         #     commitment_weight=1.0,
@@ -392,7 +392,7 @@ class VQVAE(nn.Module):
         #     threshold_ema_dead_code=2
         # )
         self.vq = ResidualVQ(
-            dim = compressed_dim,
+            dim = vq_embedding_dim,
             codebook_size = vq_num_embeddings,
             decay=0.95,
             commitment_weight=commitment_weight,
@@ -406,22 +406,22 @@ class VQVAE(nn.Module):
         )
         #self.vq = initialize_vq_with_normal_codebook(self.vq, level=0) # didn't help. not including
 
-        print("compressed_dim, vq_embedding_dim = ",compressed_dim, vq_embedding_dim)
+        print("vq_embedding_dim, internal_dim = ",vq_embedding_dim, internal_dim)
         
         # self.expand = nn.Sequential(
-        #     nn.Conv2d(compressed_dim, vq_embedding_dim, 1),  # Expand back to original dimension
-        #     nn.GroupNorm(compressed_dim, vq_embedding_dim),
+        #     nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand back to original dimension
+        #     nn.GroupNorm(vq_embedding_dim, internal_dim),
         #     nn.SiLU(),
         # )
         uncompress_layers = [
-            nn.Conv2d(compressed_dim, vq_embedding_dim, 1),  # Expand back to original dimension
-            nn.GroupNorm(compressed_dim, vq_embedding_dim),
+            nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand back to original dimension
+            nn.GroupNorm(vq_embedding_dim, internal_dim),
             nn.SiLU(),
         ]
         self.decoder = Decoder( in_channels=in_channels,
             hidden_channels=hidden_channels,
             num_downsamples=num_downsamples,
-            vq_embedding_dim=vq_embedding_dim,
+            internal_dim=internal_dim,
             use_checkpoint=use_checkpoint,
             init_layers=uncompress_layers,
         )

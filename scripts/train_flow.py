@@ -227,14 +227,6 @@ def train_flow(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device=",device)
 
-    # # Set VQVAE parameters
-    # hidden_channels = 256
-    # num_downsamples = 3
-    # vq_num_embeddings = 32
-    # vq_embedding_dim = 256
-    # codebook_levels = 4
-    # compressed_dim = 4
-    # no_grad_ckpt=False
     print("creating VQVAE model...")
 
     # Initialize VQVAE - we'll only use the decoder for viz & eval, since our data is pre-encoded
@@ -243,8 +235,8 @@ def train_flow(args):
         hidden_channels=args.hidden_channels,
         num_downsamples=args.num_downsamples,
         vq_num_embeddings=args.vq_num_embeddings,
+        internal_dim=args.internal_dim,
         vq_embedding_dim=args.vq_embedding_dim,
-        compressed_dim=args.compressed_dim,
         codebook_levels=args.codebook_levels,
         use_checkpoint=not args.no_grad_ckpt,# this refers to gradient checkpointing
         no_natten=False,
@@ -440,12 +432,12 @@ def parse_args_with_config():
     parser.add_argument('--vq-num-embeddings', type=int, 
                        default=config.get('vq-num-embeddings', 32), 
                        help='aka codebook length')
-    parser.add_argument('--vq-embedding-dim', type=int, 
-                       default=config.get('vq-embedding-dim', 256), 
+    parser.add_argument('--internal-dim', type=int, 
+                       default=config.get('internal-dim', 256), 
                        help='pre-vq emb dim before compression')
-    parser.add_argument('--compressed-dim', type=int, 
-                       default=config.get('compressed-dim', 4), 
-                       help='ACTUAL dims of codebook vectors')
+    parser.add_argument('--vq-embedding-dim', type=int, 
+                       default=config.get('vq-embedding-dim', 4), 
+                       help='(actual) dims of codebook vectors')
     parser.add_argument('--codebook-levels', type=int, 
                        default=config.get('codebook-levels', 4), 
                        help='number of RVQ levels')

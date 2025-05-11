@@ -129,9 +129,9 @@ def train_vqgan(args):
         hidden_channels=args.hidden_channels,
         num_downsamples=args.num_downsamples,
         vq_num_embeddings=args.vq_num_embeddings,
-        vq_embedding_dim=args.vq_embedding_dim,
+        internal_dim=args.internal_dim,
         codebook_levels=args.codebook_levels,
-        compressed_dim=args.compressed_dim,
+        vq_embedding_dim=args.vq_embedding_dim,
         commitment_weight=args.commitment_weight,
         use_checkpoint=not args.no_grad_ckpt,
     ).to(device)
@@ -420,12 +420,12 @@ def parse_args_with_config():
     parser.add_argument('--vq-num-embeddings', type=int, 
                        default=config.get('vq-num-embeddings', 32), 
                        help='aka codebook length')
+    parser.add_argument('--internal-dim', type=int, 
+                       default=config.get('internal-dim', 256), 
+                       help='internal pre-vq emb dim before compression')
     parser.add_argument('--vq-embedding-dim', type=int, 
-                       default=config.get('vq-embedding-dim', 256), 
-                       help='pre-vq emb dim before compression')
-    parser.add_argument('--compressed-dim', type=int, 
-                       default=config.get('compressed-dim', 4), 
-                       help='ACTUAL dims of codebook vectors')
+                       default=config.get('vq-embedding-dim', 4), 
+                       help='(actual) dims of codebook vectors')
     parser.add_argument('--codebook-levels', type=int, 
                        default=config.get('codebook-levels', 4), 
                        help='number of RVQ levels')
