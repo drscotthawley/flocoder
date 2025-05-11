@@ -216,6 +216,7 @@ class Decoder(nn.Module):
         # projection
         current_channels = hidden_channels * (2 ** (num_downsamples - 1))
         next_layers = [
+            SpatialNonLocalAttention(vq_embedding_dim),
             nn.Conv2d(vq_embedding_dim, current_channels, 1),
             NoiseInjection(current_channels), # note NoiseInjection defaults to a no-op; only here for playing with later
             EncDecResidualBlock(current_channels, current_channels, 
@@ -285,6 +286,53 @@ class DimensionReduction(nn.Module):
         )
 
 
+class SpatialNonLocalAttention(nn.Module):
+   # this doesn't affect the "channels" dimension, but rather the spatial dimensions
+   def __init__(self, channels, reduction_factor=2):
+       super().__init__()
+       self.channels = channels
+       reduced_dim = max(1, channels // reduction_factor)
+       
+       # Projections for q, k, v
+       self.q_proj = nn.Conv2d(channels, reduced_dim, 1)
+       self.k_proj = nn.Conv2d(channels, reduced_dim, 1)
+       self.v_proj = nn.Conv2d(channels, channels, 1)
+       
+       # Output projection
+       self.out_proj = nn.Conv2d(channels, channels, 1)
+       
+       # Initialize with small weights
+       nn.init.xavier_uniform_(self.q_proj.weight, gain=0.01)
+       nn.init.xavier_uniform_(self.k_proj.weight, gain=0.01)
+       nn.init.xavier_uniform_(self.v_proj.weight, gain=0.01)
+       nn.init.zeros_(self.out_proj.weight)
+       nn.init.zeros_(self.out_proj.bias)
+       
+   def _forward(self, x):
+       b, c, h, w = x.shape
+       
+       # Project inputs to queries, keys, values
+       q = self.q_proj(x).reshape(b, -1, h*w).permute(0, 2, 1)  # B, HW, C'
+       k = self.k_proj(x).reshape(b, -1, h*w)                   # B, C', HW
+       v = self.v_proj(x).reshape(b, c, h*w)                    # B, C, HW
+       
+       # Compute attention scores
+       attn = torch.bmm(q, k)                                   # B, HW, HW
+       attn = attn * (1.0 / (self.channels ** 0.5))             # Scale by sqrt(dim)
+       attn = F.softmax(attn, dim=2)                            # Softmax over source positions
+       
+       # Apply attention to values
+       out = torch.bmm(v, attn.permute(0, 2, 1))                # B, C, HW
+       out = out.view(b, c, h, w)                               # B, C, H, W
+       
+       # Final projection and residual connection
+       return x + self.out_proj(out)                            # Add residual
+   
+   def forward(self, x):
+       if x.requires_grad and self.training:
+           return checkpoint(self._forward, x, use_reentrant=False)  # Use gradient checkpointing if training
+       return self._forward(x)
+
 
 class VQVAE(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
@@ -327,6 +375,7 @@ class VQVAE(nn.Module):
             nn.SiLU(),
             nn.Conv2d(compressed_dim, compressed_dim, 3, padding=1)]
         encoder_layers.extend(compress_layers)
+        encoder_layers.append(SpatialNonLocalAttention(compressed_dim)) 
         self.encoder = nn.Sequential(*encoder_layers)
         self.info = None
 
