@@ -18,7 +18,7 @@ vqgan:
     
     # training specific to VQGAN
     training:
-        batch_size: 32
+        batch_size: 64
         learning_rate: 1e-3
         num_epochs: 10000
     
@@ -30,7 +30,7 @@ vqgan:
         warmup_epochs: 15
         # regularization parameters
         lambda_adv: 0.03
-        lambda_ce: 2.0
+        lambda_ce: 0.0
         lambda_l1: 0.2
         lambda_mse: 0.5
         lambda_spec: 2e-4 

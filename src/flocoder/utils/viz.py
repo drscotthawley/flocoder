@@ -5,18 +5,27 @@ import matplotlib.pyplot as plt
 import tempfile
 import numpy as np
 
-def rgb2g(img_t):
-   """Convert RGB piano roll to grayscale float where: BLACK->0, RED->1.0, GREEN->0.5
-   Changes image from [3,H,W] to [1,H,W], and can include batch dimension."""
-   red = (img_t[-3] > 0.5).float()  # 1.0 for red
-   green = (img_t[-2] > 0.5).float() * 0.5  # 0.5 for green
-   return (red + green).unsqueeze(-3)
 
-def g2rgb(gf_img): # gf = greyscale float
-   """Convert grayscale back to RGB: 0->BLACK, 1.0->RED, 0.5->GREEN"""
-   if gf_img.shape[-3] == 3: return gf_img 
-   gf = gf_img.squeeze(-3)
-   return torch.stack([(gf >= 0.75).float(), (torch.abs(gf - 0.5) < 0.25).float(), torch.zeros_like(gf)], dim=-3)
+def denormalize(image_batch, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+    """undoes transforms normalization, use this before displaying output demo images"""
+    # Create a deep copy to avoid modifying the original tensor
+    image_batch = image_batch.clone().detach()
+    
+    # Ensure mean and std are on the same device as image_batch
+    mean = torch.tensor(mean, device=image_batch.device)
+    std = torch.tensor(std, device=image_batch.device)
+    
+    # For batched input with shape [B, C, H, W]
+    # Reshape mean and std for proper broadcasting
+    if image_batch.dim() == 4:
+        mean = mean.view(1, 3, 1, 1)
+        std = std.view(1, 3, 1, 1)
+    
+    # Apply inverse normalization
+    image_batch = image_batch * std + mean
+    
+    return image_batch
+
 
 
 

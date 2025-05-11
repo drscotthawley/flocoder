@@ -36,21 +36,22 @@ def midi_transforms(image_size=128, random_roll=True):
     return transforms.Compose([t for t in transform_list if t is not None])
 
 
-def image_transforms(image_size=128):
+def image_transforms(image_size=128, 
+                     means=[0.485, 0.456, 0.406], # as per common ImageNet metrics
+                     stds=[0.229, 0.224, 0.225]):
     return transforms.Compose([
-            transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(15),
-            transforms.ToTensor(),
-            # normalization as per ImageNet
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        transforms.RandomRotation(degrees=15, fill=means),
+        transforms.Lambda(lambda img: transforms.CenterCrop(int(min(img.size) * 0.9))(img)), # Crop to 90% to avoid rotation artifacts
+        transforms.RandomResizedCrop(size=image_size, scale=(0.8, 1.0)),  
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=means, std=stds)
+    ])
 
 
 def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_path=None, 
-                         is_midi=True, num_workers=8, val_ratio=0.1, debug=True):
-    is_midi = is_midi or 'pop909' in data_path.lower() or 'midi' in data_path.lower()
-
+                         is_midi=False, num_workers=8, val_ratio=0.1, debug=True):
+    
     # define transforms
     if is_midi: # midi piano roll images
         train_transforms = midi_transforms(image_size)
@@ -59,9 +60,9 @@ def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_p
         train_transforms = image_transforms(image_size)
         val_transforms = image_transforms(image_size)
     
-    if data_path is None: # fall back to Oxford Flowers dataset
-        train_base = datasets.Flowers102(root='./data', split='train', transform=train_transforms, download=True)
-        val_base = datasets.Flowers102(root='./data', split='val', transform=val_transforms, download=True)
+    if data_path is None or 'flowers' in data_path.lower(): # fall back to Oxford Flowers dataset
+        train_base = datasets.Flowers102(root=data_path, split='train', transform=train_transforms, download=True)
+        val_base = datasets.Flowers102(root=data_path, split='val', transform=val_transforms, download=True)
     elif is_midi:
         train_base = MIDIImageDataset(split='train', transform=train_transforms, download=True, val_ratio=val_ratio)
         val_base = MIDIImageDataset(split='val', transform=val_transforms, download=True, val_ratio=val_ratio)

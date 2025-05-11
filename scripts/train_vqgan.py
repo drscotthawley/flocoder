@@ -21,9 +21,9 @@ from tqdm.auto import tqdm
 
 from flocoder.data.dataloaders import create_image_loaders
 from flocoder.models.vqvae import VQVAE
-from flocoder.utils.viz import viz_codebook, viz_codebooks
-from flocoder.training.vqgan_losses import *
-from flocoder.eval.metrics import *
+from flocoder.utils.viz import viz_codebook, viz_codebooks, denormalize
+from flocoder.training.vqgan_losses import *  
+from flocoder.eval.metrics import g2rgb, calculate_note_metrics, get_discriminator_stats, get_gradient_stats
 from flocoder.utils.general import save_checkpoint
 
 
@@ -119,8 +119,9 @@ def train_vqgan(args):
     print("device = ", device)
 
     # Data setup
+    is_midi = 'pop909' in args.data.lower() or 'midi' in args.data.lower()
     train_loader, val_loader = create_image_loaders(batch_size=args.batch_size, image_size=args.image_size, 
-                                            data_path=args.data, num_workers=16)
+                                            data_path=args.data, num_workers=16, is_midi=is_midi)
 
     # Initialize models and losses
     model = VQVAE(
@@ -278,31 +279,29 @@ def train_vqgan(args):
 
                     # Log validation visualizations for first batch
                     if batch_idx == 0 and not args.no_wandb:
-                        # Collect validation metrics
-                        note_metrics, metric_images = calculate_note_metrics(recon, target_imgs)
-                        metric_grids = {k: make_grid(v[:8], nrow=8, normalize=True) 
-                                    for k, v in metric_images.items()}
-                        
                         log_dict = {
                             'epoch': epoch,
                             'codebook/mean_distance': dist_stats['codebook_mean_dist'],
                             'codebook/max_distance': dist_stats['codebook_max_dist'],
-                            **{f'note_metrics/{k}': v for k, v in note_metrics.items()},
                             **{f'validation/batch_{k}_loss': v for k, v in val_losses.items()},
-                            **{f'metric_images/{k}': wandb.Image(v, caption=k) for k, v in metric_grids.items()}
                         }
+                        if is_midi: 
+                            note_metrics, metric_images = calculate_note_metrics(recon, target_imgs)
+                            metric_grids = {k: make_grid(v[:8], nrow=8, normalize=True) 
+                                    for k, v in metric_images.items()}
+                            log_dict = {log_dict | { 
+                                **{f'note_metrics/{k}': v for k, v in note_metrics.items()},
+                                **{f'metric_images/{k}': wandb.Image(v, caption=k) for k, v in metric_grids.items()}
+                            }}
 
                         # Add visualization grid
                         nrow=8  # number of examples of each to show
                         orig = batch[0][:nrow].to(device)
-                        recon = torch.clamp(recon[:8], orig.min(), orig.max())
+                        recon = torch.clamp(recon[:nrow], orig.min(), orig.max())
                         orig, recon = g2rgb(orig), g2rgb(recon)
-                        
                         viz_images = torch.cat([orig, recon])
                         caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
-                        log_dict['demo/examples'] = wandb.Image(
-                            make_grid(viz_images, nrow=8, normalize=True),
-                            caption=caption)
+                        log_dict['demo/examples'] = wandb.Image( make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
                         wandb.log(log_dict)
 
         # Compute average validation losses
