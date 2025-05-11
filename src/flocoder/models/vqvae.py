@@ -14,6 +14,7 @@ import warnings
 warnings.filterwarnings("ignore", message="None of the inputs have requires_grad=True") # annoying warnings when grad checkpointing. it's fine, really
 #from flash_attn import flash_attn_func
 import os
+import math
 
 
 # Optional: NATTEN
@@ -287,51 +288,52 @@ class DimensionReduction(nn.Module):
 
 
 class SpatialNonLocalAttention(nn.Module):
-   # this doesn't affect the "channels" dimension, but rather the spatial dimensions
-   def __init__(self, channels, reduction_factor=2):
+   def __init__(self, channels, h=16, w=16, reduction_factor=2):
        super().__init__()
-       self.channels = channels
+       self.channels, self.h, self.w = channels, h, w
        reduced_dim = max(1, channels // reduction_factor)
+       import math; self.scale = math.log(10000.0)
        
-       # Projections for q, k, v
-       self.q_proj = nn.Conv2d(channels, reduced_dim, 1)
-       self.k_proj = nn.Conv2d(channels, reduced_dim, 1)
-       self.v_proj = nn.Conv2d(channels, channels, 1)
+       # Projections with compact initialization
+       self.q_proj, self.k_proj = nn.Conv2d(channels, reduced_dim, 1), nn.Conv2d(channels, reduced_dim, 1)
+       self.v_proj, self.out_proj = nn.Conv2d(channels, channels, 1), nn.Conv2d(channels, channels, 1)
+       for proj in [self.q_proj, self.k_proj, self.v_proj]: nn.init.xavier_uniform_(proj.weight, gain=0.01)
+       nn.init.zeros_(self.out_proj.weight); nn.init.zeros_(self.out_proj.bias)
        
-       # Output projection
-       self.out_proj = nn.Conv2d(channels, channels, 1)
+   def _apply_rope(self, x):
+       b, hw, c = x.shape; device = x.device
+       if c % 2 != 0: x = F.pad(x, (0, 1)); c = x.shape[-1]  # Handle odd dimensions
        
-       # Initialize with small weights
-       nn.init.xavier_uniform_(self.q_proj.weight, gain=0.01)
-       nn.init.xavier_uniform_(self.k_proj.weight, gain=0.01)
-       nn.init.xavier_uniform_(self.v_proj.weight, gain=0.01)
-       nn.init.zeros_(self.out_proj.weight)
-       nn.init.zeros_(self.out_proj.bias)
+       # Generate position encodings
+       pos = torch.arange(hw, device=device).unsqueeze(1)
+       dim_t = torch.arange(0, c//2, device=device)
+       inv_freq = torch.exp(-dim_t * self.scale / (c//2))
+       pos_enc = pos * inv_freq.unsqueeze(0)
+       pos_enc = torch.cat([torch.sin(pos_enc), torch.cos(pos_enc)], dim=-1).unsqueeze(0).expand(b, -1, -1)
        
+       # Apply rotation efficiently
+       x_even, x_odd = x[..., 0::2], x[..., 1::2]
+       pos_sin, pos_cos = pos_enc[..., :c//2], pos_enc[..., c//2:]
+       x_out = torch.empty_like(x)
+       x_out[..., 0::2] = x_even * pos_cos - x_odd * pos_sin
+       x_out[..., 1::2] = x_odd * pos_cos + x_even * pos_sin
+       return x_out
+   
    def _forward(self, x):
        b, c, h, w = x.shape
        
-       # Project inputs to queries, keys, values
-       q = self.q_proj(x).reshape(b, -1, h*w).permute(0, 2, 1)  # B, HW, C'
-       k = self.k_proj(x).reshape(b, -1, h*w)                   # B, C', HW
-       v = self.v_proj(x).reshape(b, c, h*w)                    # B, C, HW
+       # Project, reshape, and apply RoPE
+       q = self._apply_rope(self.q_proj(x).reshape(b, -1, h*w).permute(0, 2, 1))  # [b, hw, c']
+       k = self._apply_rope(self.k_proj(x).reshape(b, -1, h*w).permute(0, 2, 1))  # [b, hw, c']
+       v = self.v_proj(x).reshape(b, c, h*w).permute(0, 2, 1)  # [b, hw, c]
        
-       # Compute attention scores
-       attn = torch.bmm(q, k)                                   # B, HW, HW
-       attn = attn * (1.0 / (self.channels ** 0.5))             # Scale by sqrt(dim)
-       attn = F.softmax(attn, dim=2)                            # Softmax over source positions
-       
-       # Apply attention to values
-       out = torch.bmm(v, attn.permute(0, 2, 1))                # B, C, HW
-       out = out.view(b, c, h, w)                               # B, C, H, W
-       
-       # Final projection and residual connection
-       return x + self.out_proj(out)                            # Add residual
+       # Compute attention and apply to values
+       attn = F.softmax(torch.bmm(q, k.transpose(1, 2)) * (q.size(-1) ** -0.5), dim=-1)
+       out = torch.bmm(attn, v).permute(0, 2, 1).reshape(b, c, h, w)
+       return x + self.out_proj(out)  # Residual connection
    
    def forward(self, x):
-       if x.requires_grad and self.training:
-           return checkpoint(self._forward, x, use_reentrant=False)  # Use gradient checkpointing if training
-       return self._forward(x)
+       return checkpoint(self._forward, x, use_reentrant=False) if x.requires_grad and self.training else self._forward(x)
 
 
 class VQVAE(nn.Module):
