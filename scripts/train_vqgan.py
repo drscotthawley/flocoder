@@ -161,8 +161,7 @@ def train_vqgan(args):
 
     # Initialize wandb
     if not args.no_wandb:
-        wandb.init(project=args.project_name, name=args.run_name)
-        wandb.config.update(vars(args))
+        wandb.init(project=args.project_name, name=args.run_name, config=vars(args))
 
     # Main training loop
     for epoch in range(start_epoch, args.epochs):
@@ -180,7 +179,7 @@ def train_vqgan(args):
             source_imgs = batch[0].to(device)
             target_imgs = source_imgs
             
-            noise_strength = 0.0 if epoch < args.warmup_epochs else 0.1 * min(1.0, (epoch - args.warmup_epochs) / 10)
+            noise_strength = 0.0 if epoch < args.warmup_epochs else 0.2 * min(1.0, (epoch - args.warmup_epochs) / 10)
 
             # Pre-warmup training
             if epoch < args.warmup_epochs:
@@ -289,25 +288,26 @@ def train_vqgan(args):
                             note_metrics, metric_images = calculate_note_metrics(recon, target_imgs)
                             metric_grids = {k: make_grid(v[:8], nrow=8, normalize=True) 
                                     for k, v in metric_images.items()}
-                            log_dict = {log_dict | { 
+                            log_dict = log_dict | { 
                                 **{f'note_metrics/{k}': v for k, v in note_metrics.items()},
                                 **{f'metric_images/{k}': wandb.Image(v, caption=k) for k, v in metric_grids.items()}
-                            }}
-
-                        # Add visualization grid
-                        nrow=8  # number of examples of each to show
-                        orig = batch[0][:nrow].to(device)
-                        recon = torch.clamp(recon[:nrow], orig.min(), orig.max())
-                        orig, recon = g2rgb(orig), g2rgb(recon)
-                        viz_images = torch.cat([orig, recon])
-                        caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
-                        log_dict['demo/examples'] = wandb.Image( make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
-                        wandb.log(log_dict)
+                            }
+                        
+                        if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:  # Add demo image visualization grid
+                            nrow=8  # number of examples of each to show
+                            orig = batch[0][:nrow].to(device)
+                            recon = torch.clamp(recon[:nrow], orig.min(), orig.max())
+                            orig, recon = g2rgb(orig), g2rgb(recon)
+                            viz_images = torch.cat([orig, recon])
+                            caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
+                            log_dict['demo/examples'] = wandb.Image( make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
+                            wandb.log(log_dict)
 
         # Compute average validation losses
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
-        if epoch % 1 == 0: viz_codebooks(model, args, epoch)
+        if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:
+            viz_codebooks(model, args, epoch)
 
         # Log epoch metrics
         if not args.no_wandb:
