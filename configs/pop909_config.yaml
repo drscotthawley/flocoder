@@ -9,35 +9,35 @@ vqgan:
     model:
         hidden_channels: 256
         num_downsamples: 3
-        vq_num_embeddings: 32
-        internal_dim: 256
+        internal_dim: 128
         vq_embedding_dim: 4
         codebook_levels: 4
-        commitment-weight: 0.5
-        no_grad_ckpt: False 
+        vq_num_embeddings: 64
+        commitment-weight: 0.6
+        no_grad_ckpt: False  
     
     # training specific to VQGAN
     training:
-        batch_size: 32
+        batch_size: 64
         learning_rate: 1e-3
-        num_epochs: 10000
-    
-        epochs: 100000
+        epochs: 10000
         # base learning rate gets scaled by the batch size
         base_lr: 1e-4
         image_size: 128
         # warmup is before the adversarial training starts
-        warmup_epochs: 15
-        # regularization parameters
+        warmup_epochs: 5
+        # loss/regularization parameters
+        # note: perceptual loss on MIDI images may be tricky as they're not really part of VGG training
         lambda_adv: 0.03
         lambda_ce: 2.0
         lambda_l1: 0.2
         lambda_mse: 0.5
+        lambda_perc: 5e-5
         lambda_spec: 2e-4 
         lambda_vq: 0.25 
 
     wandb: 
-        project_name: "flocoder-vqgan"
+        project_name: "flocoder-vqgan-midi"
         # run_name: "best to set via CLI"
 
 
@@ -67,6 +67,6 @@ flow:
         # can add more later 
 
     wandb:
-        project_name: "flocoder-flow"
+        project_name: "flocoder-flow-midi"
         # run_name: "best to set via CLI"
 
