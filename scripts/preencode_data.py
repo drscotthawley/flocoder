@@ -346,6 +346,11 @@ def preencode_data():
     encoder = PreEncoder(vae, args.data, args.output_dir, args.image_size, args.max_storage_gb, 
                          batch_size=args.batch_size, num_workers=args.num_workers, device=device)
     print(f'Writing to {args.output_dir}')
+    if os.path.exists(args.output_dir):
+        print(f"Warning/Error: Directory '{args.output_dir}' already exists.")
+        print(f"Skipping execution to avoid overwriting it.")
+        print(f"If you want to generate new data, either remove {args.output_dir} or choose a different --output-dir")
+        sys.exit(1)
     #encoder.process_dataset(args.augmentations_per_image, batch_size=args.batch_size)
     encoder.process_dataset(augs_per=args.augs_per)
 
