@@ -19,7 +19,6 @@ from torchvision import transforms
 
 from flocoder.data.datasets import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
 from flocoder.data.dataloaders import RandomRoll, create_image_loaders, midi_transforms
-from flocoder.models.vqvae import VQVAE
 
 
 def generate_random_string(length=6):
@@ -28,9 +27,9 @@ def generate_random_string(length=6):
 
 
 class PreEncoder:
-    # only reason this is a class is because Claude made it that way ;-) -SHH
-    def __init__(self, vqvae, data_path, output_dir, image_size=128, max_storage_gb=50, num_workers=None, batch_size=100):
-        self.vqvae = vqvae
+    # only reason this is a class instead of a "def" is because Claude made it that way ;-) -SHH
+    def __init__(self, vae, data_path, output_dir, image_size=128, max_storage_gb=50, num_workers=None, batch_size=100, device='cuda'):
+        self.vae = vae
         self.output_dir = Path(output_dir).expanduser().absolute()
         self.max_storage_bytes = max_storage_gb * 1024**3
         self.current_storage = 0
@@ -38,6 +37,7 @@ class PreEncoder:
         self.batch_size = batch_size  # Set default batch size to 100
         self.storage_lock = threading.Lock()
         self.file_size = None
+        self.device = device
     
     # Rest of initialization code...
 
@@ -65,10 +65,16 @@ class PreEncoder:
 
 
     def encode_batch(self, batch):
-        """Encode a batch of image tensors using VQVAE with prefetching."""
-        with torch.no_grad(): # and torch.amp.autocast(device_type='cuda'): # optional: Using autocast for mixed precision will shave a few minutes off
-            batch = batch.to(self.vqvae.device, non_blocking=True) 
-            return self.vqvae.encode(batch)
+        """Encode a batch of image tensors using VAE with proper scaling."""
+        with torch.no_grad():
+            batch = batch.to(self.device, non_blocking=True)
+            if not self.vae.is_sd: 
+                return self.vae.encode(batch)
+            if batch.min() >= 0 and batch.max() <= 1:  # SD VAE expects images in [-1, 1]
+                batch = 2 * batch - 1  # If images are [0, 1], convert to [-1, 1]  
+            latents = self.vae.encode(batch).latent_dist.mean
+            return latents * self.vae.scaling_factor   # SD uses this scaling factor to make latents closer to N(0,1)
+        
     
     def save_encodings(self, encoded_batch, filenames):
         """Save an entire batch of encoded tensors as a single file."""
@@ -211,13 +217,12 @@ def parse_args_with_config():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
     args, _ = parser.parse_known_args()
-    
+    config = {}  # Initialize config
+
     # Load config file if provided
     if args.config:
         with open(args.config, 'r') as f:
             yaml_config_full = yaml.safe_load(f)
-        
-        config = {}  # Initialize config
         
         # Add global data if it exists
         if 'data' in yaml_config_full:
@@ -245,7 +250,7 @@ def parse_args_with_config():
     parser.add_argument('--data', type=str, 
                        default=config.get('data', None), 
                        help='path to top-level-directory containing custom image data')
-    parser.add_argument('--output_dir', default=config.get('data', None)+'_encoded', type=str,
+    parser.add_argument('--output_dir', default=config.get('data', '.')+'_encoded', type=str,
                       help='directory to save encoded tensors')
     parser.add_argument('--max_storage_gb', type=float, default=50,
                       help='maximum storage to use in gigabytes')
@@ -293,7 +298,6 @@ def parse_args_with_config():
 
 
 def preencode_data():
-
     # cuda setups for speed
     torch.cuda.empty_cache()
     torch.backends.cudnn.benchmark = True  
@@ -302,29 +306,41 @@ def preencode_data():
     args = parse_args_with_config()
     print("args = ", args)
 
-    # Initialize VQVAE
-    vqvae = VQVAE(
-        in_channels=3,
-        hidden_channels=args.hidden_channels,
-        num_downsamples=args.num_downsamples,
-        internal_dim=args.internal_dim,
-        vq_embedding_dim=args.vq_embedding_dim,
-        codebook_levels=args.codebook_levels,
-        use_checkpoint=not args.no_grad_ckpt,# this refers to gradient checkpointing
-        no_natten=False,
-    ).eval()
-    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    vqvae = vqvae.to(device)
-    vqvae.device = device
 
-    print(f"Loading VQVAE checkpoint from {args.vqgan_checkpoint}")
-    checkpoint = torch.load(args.vqgan_checkpoint, map_location=device, weights_only=True)
-    vqvae.load_state_dict(checkpoint['model_state_dict'])
-    print("VQVAE checkpoint loaded successfully")
+    # Initialize vae
+    if 'SD' in args.vqgan_checkpoint or 'stable-diffusion' in args.vqgan_checkpoint:
+        from diffusers.models import AutoencoderKL
+
+        print(f"Loading (VQ)VAE checkpoint from HuggingFace Diffusers")
+        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
+        vae.is_sd = True
+        vae.scaling_factor = 0.18215  # SD's standard scaling factor
+        if args.image_size % 8 != 0:
+            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {args.image_size}")
+    else:
+        from flocoder.models.vqvae import VQVAE
+        vae = VQVAE(
+            in_channels=3,
+            hidden_channels=args.hidden_channels,
+            num_downsamples=args.num_downsamples,
+            internal_dim=args.internal_dim,
+            vq_embedding_dim=args.vq_embedding_dim,
+            codebook_levels=args.codebook_levels,
+            use_checkpoint=not args.no_grad_ckpt,# this refers to gradient checkpointing
+            no_natten=False,
+        ).eval().to(device)
+        print(f"Loading (VQ)VAE checkpoint from {args.vqgan_checkpoint}")
+        checkpoint = torch.load(args.vqgan_checkpoint, map_location=device, weights_only=True)
+        vae.load_state_dict(checkpoint['model_state_dict'])
+        vae.is_sd = False
+        vae.scaling_factor = 1.0 
+
+    print("(VQ)VAE checkpoint loaded successfully")
     
-    encoder = PreEncoder(vqvae, args.data, args.output_dir, args.image_size, args.max_storage_gb, 
+
+    encoder = PreEncoder(vae, args.data, args.output_dir, args.image_size, args.max_storage_gb, 
                          batch_size=args.batch_size, num_workers=args.num_workers)
     print(f'Writing to {args.output_dir}')
     #encoder.process_dataset(args.augmentations_per_image, batch_size=args.batch_size)
