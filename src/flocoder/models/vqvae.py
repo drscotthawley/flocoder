@@ -132,13 +132,16 @@ class NATTENBlock(nn.Module):
 
 
 class EncDecResidualBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1, use_checkpoint=False, attention='natten'):
+    def __init__(self, in_channels, out_channels, stride=1, use_checkpoint=False, attention='natten', dropout_rate=0.1, dropout2d_rate=None):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
         self.norm1 = nn.GroupNorm(8, out_channels)
         self.silu = nn.SiLU()
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
         self.norm2 = nn.GroupNorm(8, out_channels)
+        self.dropout = nn.Dropout(dropout_rate)
+        if dropout2d_rate is None: dropout2d_rate = max(0.05, dropout_rate-0.05)
+        self.dropout2d = nn.Dropout2d(dropout2d_rate)
 
         self.downsample = None
         if stride != 1 or in_channels != out_channels:
@@ -161,6 +164,7 @@ class EncDecResidualBlock(nn.Module):
         out = self.conv1(x)
         out = self.norm1(out)
         out = self.silu(out)
+        out = self.dropout(self.dropout2d(out))
 
         if self.attn:
             out = self.attn(out) 
@@ -173,6 +177,7 @@ class EncDecResidualBlock(nn.Module):
 
         out += identity
         out = self.silu(out)
+        out = self.dropout(self.dropout2d(out))
         return out
 
     def forward(self, x):
@@ -182,17 +187,20 @@ class EncDecResidualBlock(nn.Module):
 
 
 class NoiseInjection(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, channels, noise_strength=0.0):
         super().__init__()
         self.to_noise_scale = nn.Conv2d(channels, channels, 1)  # Generate per-pixel noise scales
         self.to_noise_bias = nn.Conv2d(channels, channels, 1)   # Generate per-pixel noise biases
-        
+        self.noise_strength = noise_strength
+
+
         # Initialize to near-zero
         nn.init.zeros_(self.to_noise_scale.weight)
         nn.init.zeros_(self.to_noise_bias.weight)
         
-    def forward(self, x, noise_strength=0.0): # default noise_strength is that this is a no-op
-        if noise_strength == 0.0:
+    def forward(self, x, noise_strength=None): # default noise_strength is that this is a no-op
+        if noise_strength is None: noise_strength = self.noise_strength
+        if noise_strength == 0.0: # note there is no restriction on whether we're training or not
             return x
             
         # Generate unique noise for this forward pass
@@ -208,20 +216,23 @@ class NoiseInjection(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
-                 internal_dim=256, inject_noise=True, use_checkpoint=False,
-                 init_layers = []):
+                 internal_dim=256, vq_embedding_dim=4, inject_noise=True, use_checkpoint=False,):
         super().__init__()
         
-        decoder_layers = init_layers
+        decoder_layers = []
+        noise_strength = 0.0# leave this off for now and just try Dropout #  0.01 if inject_noise else 0.0
 
         # projection
         current_channels = hidden_channels * (2 ** (num_downsamples - 1))
         next_layers = [
-            SpatialNonLocalAttention(internal_dim),
-            nn.Conv2d(internal_dim, current_channels, 1),
-            NoiseInjection(current_channels), # note NoiseInjection defaults to a no-op; only here for playing with later
+            SpatialNonLocalAttention(vq_embedding_dim),
+            nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand to internal_dim
+            nn.GroupNorm(vq_embedding_dim, internal_dim),
+            nn.SiLU(),
+            nn.Conv2d(internal_dim, current_channels, 1),  # Then to current_channels
+            NoiseInjection(current_channels, noise_strength=0.01), # try to inject a little generative "information"
             EncDecResidualBlock(current_channels, current_channels, 
-                              use_checkpoint=use_checkpoint, attention='full')
+                            use_checkpoint=use_checkpoint, attention='full',  dropout_rate=0.05)
         ]
         decoder_layers.extend(next_layers)
 
@@ -234,24 +245,28 @@ class Decoder(nn.Module):
                 attention, mode = 'natten','bicubic'
             else:
                 attention, mode = None, 'bilinear'
+
             block = [
-                nn.Upsample(scale_factor=2, mode=mode, align_corners=False),
-                NoiseInjection(current_channels),
+                #nn.Upsample(scale_factor=2, mode=mode, align_corners=False), use PixelShuffle instead of Upsample
+                nn.Conv2d(current_channels, current_channels * 4, 3, padding=1),
+                nn.SiLU(),
+                nn.PixelShuffle(2), 
+                NoiseInjection(current_channels),#  noise_strength=0.002),
                 EncDecResidualBlock(current_channels, out_channels, 
-                                  use_checkpoint=use_checkpoint, attention=attention),
-                NoiseInjection(out_channels),
+                                  use_checkpoint=use_checkpoint, attention=attention, dropout_rate=0, dropout2d_rate=0.1),
+                NoiseInjection(out_channels),# noise_strength=0.001),
                 EncDecResidualBlock(out_channels, out_channels, 
-                                  use_checkpoint=use_checkpoint, attention=None)
+                                  use_checkpoint=use_checkpoint, attention=None, dropout_rate=0.0, dropout2d_rate=0.0)
             ]
             decoder_layers.extend(block)
             current_channels = out_channels
 
         # Final layers
         final_layers = [
-            NoiseInjection(current_channels),
+            NoiseInjection(current_channels),# noise_strength=0.0),
             nn.Conv2d(current_channels, 64, 3, padding=1),
             nn.SiLU(),
-            NoiseInjection(64),
+            NoiseInjection(64),#  noise_strength=0.0),
             nn.Conv2d(64, in_channels, 3, padding=1),
         ]
         decoder_layers.extend(final_layers)
@@ -361,13 +376,14 @@ class VQVAE(nn.Module):
             else: 
                 attention = None
             encoder_layers.append(EncDecResidualBlock(in_channels_current, out_channels, 
-                                stride=2, use_checkpoint=use_checkpoint, attention=attention))
+                                stride=2, use_checkpoint=use_checkpoint, attention=attention, dropout_rate=0.05))
+            
             encoder_layers.append(EncDecResidualBlock(out_channels, out_channels, 
-                                stride=1, use_checkpoint=use_checkpoint, attention=attention))
+                                stride=1, use_checkpoint=use_checkpoint, attention=attention, dropout_rate=0.15))
             in_channels_current = out_channels
                 
         encoder_layers.append(EncDecResidualBlock(in_channels_current, internal_dim, 
-                            stride=1, use_checkpoint=use_checkpoint, attention=attention))
+                            stride=1, use_checkpoint=use_checkpoint, attention=attention, dropout_rate=0.15))
         encoder_layers.append(nn.Conv2d(internal_dim, internal_dim, 1)) # final conv2d undoes swish at end of EncDecResidualBlock
         
         # added this extra set of compression layers
@@ -401,7 +417,7 @@ class VQVAE(nn.Module):
             kmeans_iters = 15, 
             threshold_ema_dead_code = 2,
             rotation_trick = True,
-            orthogonal_reg_weight=0.1,
+            orthogonal_reg_weight=0.2,
             #implicit_neural_codebook=True, # trying it :shrug: IDK
         )
         #self.vq = initialize_vq_with_normal_codebook(self.vq, level=0) # didn't help. not including
@@ -413,17 +429,17 @@ class VQVAE(nn.Module):
         #     nn.GroupNorm(vq_embedding_dim, internal_dim),
         #     nn.SiLU(),
         # )
-        uncompress_layers = [
-            nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand back to original dimension
-            nn.GroupNorm(vq_embedding_dim, internal_dim),
-            nn.SiLU(),
-        ]
+        uncompress_layers = []
+        #    nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand back to original dimension
+        #    nn.GroupNorm(vq_embedding_dim, internal_dim),
+        #    nn.SiLU(),
+        #]
         self.decoder = Decoder( in_channels=in_channels,
             hidden_channels=hidden_channels,
             num_downsamples=num_downsamples,
             internal_dim=internal_dim,
+            vq_embedding_dim=vq_embedding_dim,
             use_checkpoint=use_checkpoint,
-            init_layers=uncompress_layers,
         )
         #----- end of init
 
@@ -451,8 +467,10 @@ class VQVAE(nn.Module):
             'codebook_max_dist': distances.max().item()
         }
         
-    def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
+    def forward(self, x, noise_strength=None, minval=0, get_stats=False):
         z = self.encode(x)
+        if noise_strength is None:
+            noise_strength = 0.05 if self.training else 0.0
 
         if self.info is None: 
             self.info = z.shape
