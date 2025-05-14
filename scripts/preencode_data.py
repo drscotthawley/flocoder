@@ -13,12 +13,14 @@ from tqdm import tqdm
 import concurrent.futures
 import threading
 import time
+import sys
 
 
-from torchvision import transforms
+from torchvision import transforms, datasets
+
 
 from flocoder.data.datasets import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
-from flocoder.data.dataloaders import RandomRoll, create_image_loaders, midi_transforms
+from flocoder.data.dataloaders import RandomRoll, create_image_loaders, midi_transforms, image_transforms
 
 
 def generate_random_string(length=6):
@@ -50,8 +52,9 @@ class PreEncoder:
         print(f"Using {self.num_workers} workers for data loading")
 
         if self.output_dir.exists() and self.output_dir.is_dir():
-            print(f"Found existing directory {self.output_dir}. Wiping it")
-            shutil.rmtree(self.output_dir)
+            print(f"Found existing directory {self.output_dir}. Aborting")
+            #shutil.rmtree(self.output_dir)
+            sys.exit(1)
         print(f"Creating output directory {self.output_dir}")
         try:
             self.output_dir.mkdir(parents=True)
@@ -59,8 +62,13 @@ class PreEncoder:
         except Exception as e:
             print(f"Error creating directory: {e}")
         
-        transform = midi_transforms(image_size=self.image_size, random_roll=True)
-        self.dataset = MIDIImageDataset(transform=transform, debug=True)
+        if data_path is None or 'flowers' in data_path.lower():
+            transform = image_transforms(image_size=self.image_size)
+            self.dataset = datasets.Flowers102(root=data_path, split='train', transform=transform, download=True)
+        else: 
+            transform = midi_transforms(image_size=self.image_size, random_roll=True)
+            self.dataset = MIDIImageDataset(transform=transform, debug=True)
+
         self.dataset = InfiniteDataset(self.dataset)  # Wrap in infinite dataset for augmentation
 
 
