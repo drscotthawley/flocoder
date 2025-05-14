@@ -311,7 +311,10 @@ def preencode_data():
 
     # Initialize vae
     if 'SD' in args.vqgan_checkpoint or 'stable-diffusion' in args.vqgan_checkpoint:
-        from diffusers.models import AutoencoderKL
+        try:
+            from diffusers.models import AutoencoderKL
+        except ImportError:
+            raise ImportError("To use SD VAE, you need to install diffusers. Try: pip install diffusers")
 
         print(f"Loading (VQ)VAE checkpoint from HuggingFace Diffusers")
         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
@@ -341,7 +344,7 @@ def preencode_data():
     
 
     encoder = PreEncoder(vae, args.data, args.output_dir, args.image_size, args.max_storage_gb, 
-                         batch_size=args.batch_size, num_workers=args.num_workers)
+                         batch_size=args.batch_size, num_workers=args.num_workers, device=device)
     print(f'Writing to {args.output_dir}')
     #encoder.process_dataset(args.augmentations_per_image, batch_size=args.batch_size)
     encoder.process_dataset(augs_per=args.augs_per)
