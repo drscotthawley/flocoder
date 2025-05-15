@@ -327,7 +327,7 @@ def preencode_data():
         print(f"Loading (VQ)VAE checkpoint from HuggingFace Diffusers")
         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
         vae.is_sd = True
-        vae.scaling_factor = 0.18215  # SD's standard scaling factor
+        vae.scaling_factor = 1.0 # THIS IS WRONG---> 0.18215  # SD's standard scaling factor
         if args.image_size % 8 != 0:
             print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {args.image_size}")
     else:
