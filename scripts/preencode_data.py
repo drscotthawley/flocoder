@@ -84,39 +84,39 @@ class PreEncoder:
             return latents * self.vae.scaling_factor   # SD uses this scaling factor to make latents closer to N(0,1)
         
     
-    def save_encodings(self, encoded_batch, filenames):
-        """Save an entire batch of encoded tensors as a single file."""
-        # Generate a unique batch identifier
-        batch_id = generate_random_string(8)
+    # def save_encodings(self, encoded_batch, filenames):
+    #     """Save an entire batch of encoded tensors as a single file."""
+    #     # Generate a unique batch identifier
+    #     batch_id = generate_random_string(8)
         
-        # Create batch data structure
-        batch_data = {
-            'encodings': encoded_batch,
-            'filenames': filenames,
-            'timestamp': time.time(),
-            'batch_id': batch_id
-        }
-        assert encoded_batch.shape[0] == self.batch_size, f"Batch size mismatch: {encoded_batch.shape[0]} != {self.batch_size}"
+    #     # Create batch data structure
+    #     batch_data = {
+    #         'encodings': encoded_batch,
+    #         'filenames': filenames,
+    #         'timestamp': time.time(),
+    #         'batch_id': batch_id
+    #     }
+    #     assert encoded_batch.shape[0] == self.batch_size, f"Batch size mismatch: {encoded_batch.shape[0]} != {self.batch_size}"
         
-        # Create filename for the batch
-        out_path = self.output_dir / f"batch_{batch_id}.pt"
+    #     # Create filename for the batch
+    #     out_path = self.output_dir / f"batch_{batch_id}.pt"
         
-        # Save the batch as a single file
-        torch.save(batch_data, out_path)
+    #     # Save the batch as a single file
+    #     torch.save(batch_data, out_path)
         
-        # Update storage tracking
-        file_size = os.path.getsize(out_path)
-        with self.storage_lock:
-            self.current_storage += file_size
+    #     # Update storage tracking
+    #     file_size = os.path.getsize(out_path)
+    #     with self.storage_lock:
+    #         self.current_storage += file_size
         
-        # Periodically check total directory size (less frequent now that we have fewer files)
-        if random.random() < 0.01:  # 1% chance
-            total = sum(
-                os.path.getsize(f) for f in self.output_dir.glob('**/*')
-                if f.is_file()
-            )
-            if total > self.current_storage:
-                self.current_storage = total
+    #     # Periodically check total directory size (less frequent now that we have fewer files)
+    #     if random.random() < 0.01:  # 1% chance
+    #         total = sum(
+    #             os.path.getsize(f) for f in self.output_dir.glob('**/*')
+    #             if f.is_file()
+    #         )
+    #         if total > self.current_storage:
+    #             self.current_storage = total
 
 
 
@@ -150,7 +150,7 @@ class PreEncoder:
             batch_buffer = []
             buffer_size = 5  # Buffer several batches for bulk processing
             
-            for batch_idx, (images, _) in enumerate(dataloader):
+            for batch_idx, (images, classes) in enumerate(dataloader):
                 if batch_idx >= max_batches:
                     break
                     
@@ -164,7 +164,7 @@ class PreEncoder:
                 # Add to buffer
                 batch_filenames = [f"sample_{batch_idx}_{i}_{generate_random_string(4)}" 
                                 for i in range(images.size(0))]
-                batch_buffer.append((encoded_batch, batch_filenames))
+                batch_buffer.append((encoded_batch, classes, batch_filenames))
                 
                 # Process buffer when full
                 if len(batch_buffer) >= buffer_size:
@@ -195,7 +195,8 @@ class PreEncoder:
         combined_batch_id = generate_random_string(8)
         combined_data = {
             'encodings': [item[0] for item in batch_buffer],
-            'filenames': [item[1] for item in batch_buffer],
+            'classes':   [item[1] for item in batch_buffer],
+            'filenames': [item[2] for item in batch_buffer],
             'timestamp': time.time(),
             'batch_id': combined_batch_id
         }

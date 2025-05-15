@@ -45,8 +45,9 @@ preencoding:
     batch_size: 32
     num_workers: 8
     max_storage_gb: 50
-    augs_per: 512
-    vqgan_checkpoint: "checkpoints/final_vqgan_flowers.pt"
+    augs_per: 768
+    #vqgan_checkpoint: "checkpoints/final_vqgan_flowers.pt"
+    vqgan_checkpoint: "SD"
 
 
 flow: 
@@ -58,7 +59,8 @@ flow:
         num_heads: 8
         num_channels: 256
         num_residuals: 2
-        # can add more later
+        n_classes: 102
+        condition: True
     training: 
         batch_size: 4096
         learning_rate: 1e-4

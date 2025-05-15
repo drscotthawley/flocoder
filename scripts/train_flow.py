@@ -38,7 +38,7 @@ import gc
 # print("batch_size = ",batch_size)
 # B = batch_size
 # learning_rate = 1e-3
-# num_epochs = 999999 # 1000  or just let it go til the disk fills with checkpoints TODO: keep only last few checkpoints
+# epochs = 999999 # 1000  or just let it go til the disk fills with checkpoints TODO: keep only last few checkpoints
 # eps = 0.001 # used in integration
 # condition = False  # Enaable class-conditioning
 # n_classes = None # updates in main()
@@ -85,7 +85,7 @@ class EMA:
                 self.backup[name] = None
 
 
-def euler_sampler(model, shape, sample_N, device, eps=0.001):
+def euler_sampler(model, shape, sample_N, device, eps=0.001, n_classes=0):
     """quick and dirty integration using Euler method; not very accurate"""
     model.eval()
     #cond = torch.arange(10).repeat(shape[0] // 10).to(device) if condition else None
@@ -113,12 +113,14 @@ def from_flattened_numpy(x, shape):
     return torch.from_numpy(x.reshape(shape))
 
 
-def rk45_sampler(model, shape, device, eps=0.001):
+def rk45_sampler(model, shape, device, eps=0.001, n_classes=0):
     """Runge-Kutta '4.5' order method for integration. Source: Tadoa Yomaoka"""
     rtol = atol = 1e-05
     model.eval()
-    #cond = torch.arange(n_classes).repeat(shape[0] // n_classes).to(device) if condition else None 
-    cond = None# torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device) # this is for a 10x10 grid of outputs, with one class per column
+    if n_classes > 0: 
+        cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device) # this is for a 10x10 grid of outputs, with one class per column
+    else: 
+        cond = torch.zeros(10,).repeat(shape[0] // 10).to(device)
     with torch.no_grad():
         z0 = torch.randn(shape, device=device)
         x = z0.detach().clone()
@@ -175,7 +177,8 @@ def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="o
 
 
 @torch.no_grad()
-def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="", images=None, use_wandb=True, output_dir="output"):
+def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="", 
+         images=None, use_wandb=True, output_dir="output", n_classes=0):
     model.eval()
     # saves sample generated images, unless images are passed through (target data)
     # TODO: Refactor. this is janky. images are not the same as latents. 
@@ -184,9 +187,9 @@ def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="
 
     if images is None:
         if method == "euler":
-            images, nfe = euler_sampler( model, shape=shape, sample_N=sample_N, device=device)
+            images, nfe = euler_sampler( model, shape=shape, sample_N=sample_N, device=device, n_classes=n_classes)
         elif method == "rk45":
-            images, nfe = rk45_sampler(model, shape=shape, device=device)
+            images, nfe = rk45_sampler(model, shape=shape, device=device, n_classes=n_classes)
     else:
         nfe=0
     #save_img_grid(images, f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png")
@@ -215,28 +218,25 @@ def warp_time(t, dt=None, s=.5):
 
 
 def train_flow(args):
-    global n_classes  # TODO: this is janky
-
 
     print(f"====================   data_path = {args.data}")
 
-    dataset = PreEncodedDataset(args.data) # "/data/encoded-POP909")
-    #dataset = InfiniteDataset(dataset)
+    dataset = PreEncodedDataset(args.data) 
     train_dataloader = DataLoader(
         dataset=dataset,
         batch_size=args.batch_size,
-        #shuffle=True,
+        shuffle=True,
         num_workers=12,
         pin_memory=True
     )
     dataloader = train_dataloader # alias to avoid errors later
 
-    n_classes = 0
-    condition = False  # Enable class-conditioning
-    C, H,W = 4, args.image_size, args.image_size  # TODO: get this from sample data 
+    n_classes, condition = args.n_classes, args.condition
+    C, H, W = 4, 16, 16 # TODO: read this from data!!
+
 
     print(f"Configuring model for {n_classes} classes\n")
-    output_dir = f"output_flowers-sd-{H}x{W}" # TODO: fix this.
+    output_dir = f"output_midi-sd-{H}x{W}" # TODO: fix this so it reads from data!!
     os.makedirs(output_dir, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -289,8 +289,8 @@ def train_flow(args):
         dim=H,
         channels=C,
         dim_mults=(1, 2, 4),
-        condition=condition,
-        n_classes=n_classes,
+        condition=args.condition,
+        n_classes=args.n_classes,
         #use_checkpoint=True,
     )
     model.to(device)
@@ -299,6 +299,7 @@ def train_flow(args):
     #model.load_state_dict(checkpoint)
     #print("model checkpoint loaded")
 
+    loss_fn = torch.nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
     use_wandb = not args.no_wandb
     if use_wandb: wandb.init(project=args.project_name, name=args.run_name, config=vars(args))
@@ -312,27 +313,29 @@ def train_flow(args):
         pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{args.epochs}:')
         for batch, cond in pbar:
             batch = batch.to(device)
+            target = batch # alias
 
             optimizer.zero_grad()
 
-            z0 = torch.randn_like(batch)
+            source = torch.randn_like(batch)
             t = torch.rand(batch.shape[0], device=device) * (1 - eps) + eps
             t = warp_time(t)          
 
-            t_expand = t.view(-1, 1, 1, 1).repeat(
-                1, batch.shape[1], batch.shape[2], batch.shape[3]
-            )
-            #print("t.shape, t_expand.shape, batch.shape = ",t.shape, t_expand.shape, batch.shape)
-            perturbed_data = t_expand * batch + (1 - t_expand) * z0
-            target = batch - z0 # velocity
+            t_expand = t.view(-1, 1, 1, 1).repeat(  1, batch.shape[1], batch.shape[2], batch.shape[3] )
+            perturbed_data = t_expand * batch + (1 - t_expand) * source
+            # target = batch - source # velocity
 
-            score = model(
-                perturbed_data, t * 999, cond.to(device) if condition else None
-            )
+            # score = model(
+            #     perturbed_data, t * 999, cond.to(device) if condition else None
+            # )
 
-            losses = torch.square(score - target)
-            losses = torch.mean(losses.reshape(losses.shape[0], -1), dim=-1)
-            loss = torch.mean(losses)
+            # losses = torch.square(score - target)
+            # losses = torch.mean(losses.reshape(losses.shape[0], -1), dim=-1)
+            # loss = torch.mean(losses)
+
+            v_guess = target - source  #batch - z0
+            v_model = model(  perturbed_data, t * 999, cond.to(device) if condition else None )
+            loss = loss_fn(v_model, v_guess)
 
             loss.backward()
 
@@ -361,10 +364,10 @@ def train_flow(args):
             batch, score, target = None, None, None
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval(model, vae, epoch, "target_data", device, tag="", images=images, use_wandb=use_wandb, output_dir=output_dir)
-            eval(model, vae, epoch, "rk45", device, tag="", use_wandb=use_wandb, output_dir=output_dir)
+            eval(model, vae, epoch, "target_data", device, tag="", images=images, use_wandb=use_wandb, output_dir=output_dir, n_classes=args.n_classes)
+            eval(model, vae, epoch, "rk45", device, tag="", use_wandb=use_wandb, output_dir=output_dir, n_classes=args.n_classes)
             ema.eval()
-            eval(model, vae, epoch, "rk45", device, tag="ema_", use_wandb=use_wandb, output_dir=output_dir)
+            eval(model, vae, epoch, "rk45", device, tag="ema_", use_wandb=use_wandb, output_dir=output_dir, n_classes=args.n_classes)
             ema.train()
 
         if (epoch + 1) % 25 == 0: # checkpoint every 100
@@ -449,6 +452,9 @@ def parse_args_with_config():
     parser.add_argument('--load-checkpoint', type=str, 
                        default=config.get('load-checkpoint', None), 
                        help='path to load checkpoint to resume training from')
+    parser.add_argument('--n-classes', type=int, 
+                       default=config.get('n-classes', 0), 
+                       help='number of classes (for class-conditioned training)')
     
     # vq parameters
     parser.add_argument('--vqgan-checkpoint', type=str, 
@@ -482,6 +488,7 @@ def parse_args_with_config():
     parser.add_argument('--run-name', type=str, 
                        default=config.get('run-name', None), 
                        help='WandB run name')
+    parser.add_argument('--condition', action='store_true', help='whether to include conditioning')
     parser.add_argument('--no-grad-ckpt', action='store_true', 
                        help='disable gradient checkpointing')
     

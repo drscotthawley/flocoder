@@ -46,8 +46,9 @@ preencoding:
     batch_size: 32
     num_workers: 8
     max_storage_gb: 50
-    augs_per: 512
-    vqgan_checkpoint: "checkpoints/final_vqgan_epoch9999.pt"
+    augs_per: 768
+    #vqgan_checkpoint: "checkpoints/final_vqgan_epoch9999.pt"
+    vqgan_checkpoint: "SD"
 
 
 flow: 
@@ -59,9 +60,11 @@ flow:
         num_heads: 8
         num_channels: 256
         num_residuals: 2
-        # can add more later
+        n_classes: 0
+        condition: False 
     training: 
-        batch_size: 4096
+      # smaller batch means more gradient steps, less epoch-latency :-) 
+        batch_size: 256
         learning_rate: 1e-4
         num_epochs: 10000
         # can add more later 

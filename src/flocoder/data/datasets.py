@@ -110,7 +110,7 @@ class ImageListDataset(Dataset):
 
         if self.transform:
             img = self.transform(img)
-        return img, 0  # Return 0 as class label since intended image set (MIDI piano rolls) doesn't have classes
+        return img, 0  
     
 
 class MIDIImageDataset(ImageListDataset):
@@ -221,26 +221,31 @@ class PreEncodedDataset(Dataset):
 
     def __getitem__(self, idx):
         file_path = self.files[idx]
-        class_num = 0  # TODO: include class or other conditioning/label info
 
         # Load encoded tensor to CPU and detach from computation graph
         encoded = torch.load(file_path, map_location='cpu', weights_only=True)
         
         if isinstance(encoded, dict):  # encoded data may be in little batches.
+            classes = encoded['classes']
             encoded = encoded['encodings']
             
         if isinstance(encoded, list):
-            encoded = random.choice(encoded)  # Select one encoding from the list
+            i = random.randint(0, len(encoded)-1)
+            assert i<len(encoded) and len(encoded)==len(classes), f"i = {i}, len(encoded) = {len(encoded)}, len(classes) = {len(classes)}"
+            classes = classes[i]
+            encoded = encoded[i]  # Select one encoding from the list
         
         # Handle batch dimension if present
         if len(encoded.shape) > 3:
             i = random.randint(0, encoded.shape[0]-1)  
             encoded = encoded[i]  # Select a single item from the batch
-                
-        # Ensure encoded has the shape [4, 16, 16]
-        #assert encoded.shape == (4, 16, 16), f"Expected shape (4, 16, 16), got {encoded.shape}"
+            try:
+                classes = classes[i]
+            except e:
+                print("i = ",i,", encoded.shape = ",encoded.shape,", classes.shape = ",classes.shape)
+                assert False
         
-        return encoded, class_num
+        return encoded, classes
 
 
 
