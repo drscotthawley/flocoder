@@ -1,16 +1,15 @@
 # Flocoder
 
-A (quantized) latent generative flow matching model. (The name is inspired by "vocoder.")
+A package for exploring latent generative flow matching models. (The name is inspired by "vocoder.")
 
-This is primarily intended as a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but is designed to work on more general datasets too. 
+This project initially started as a way to provide a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but `flocoder` designed to work on more general datasets too. 
 
-## NOTE: This is a refactor of older/messier code. Not everything in this refactor works yet. -SHH
 
 ## Architecture Overview
 
 <img src="images/flow_schematic.jpg" width="350" alt="MIDI Flow Architecture">
 
-The above diagram illustrates the architecture of our model: a VQVAE compresses MIDI data into a discrete latent space, while a flow model learns to generate new samples in the continuous latent space.
+The above diagram illustrates the architecture of our intended model: a VQVAE compresses MIDI data into a discrete latent space, while a flow model learns to generate new samples in the continuous latent space.  But we can also flow in the continuous space of a VAE like the one for Stable Diffusion. 
 
 ## Installation
 
