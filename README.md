@@ -4,6 +4,13 @@ A package for exploring latent generative flow matching models. (The name is ins
 
 This project initially started as a way to provide a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but `flocoder` designed to work on more general datasets too. 
 
+## Quickstart
+
+Head over to [`notebooks/SD_Flower_Flow.ipynb`](https://github.com/drscotthawley/flocoder/blob/main/notebooks/SD_Flower_Flow.ipynb) and run through it for a taste. It will run on Colab. 
+
+## Overview
+
+Check out the sets of slides linked to on [`notebooks/README.md`](https://github.com/drscotthawley/flocoder/blob/main/notebooks/README.md).
 
 ## Architecture Overview
 
@@ -62,9 +69,6 @@ The project is organized as follows:
 - `notebooks/`: Jupyter notebooks for tutorials and examples
 - `tests/`: Unit tests
 
-## Quickstart
-
-Head over to [`notebooks/SD_Flower_Flow.ipynb`](https://github.com/drscotthawley/flocoder/blob/main/notebooks/SD_Flower_Flow.ipynb) and run through it for a taste. It will run on Colab. 
 
 ## Training
 
