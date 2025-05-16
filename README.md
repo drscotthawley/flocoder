@@ -33,7 +33,7 @@ source .venv/bin/activate
 # On Windows:
 # .venv\Scripts\activate
 
-# Install the package in editable mode
+# Install the package in editable mode (See below re. NATTEN errors)
 uv pip install -e .
 
 # Recommended: Install development dependencies (jupyter, others...)
@@ -66,11 +66,14 @@ The project is organized as follows:
 
 The package includes several training scripts located in the `scripts/` directory:
 
-### Training the VQGAN
-(terminology note: VQGAN = VQVAE + attention + adversarial loss. We use VQGAN/VQVAE somewhat interchangeably.)
+### Optional Training a VQGAN
+You can use use the Stable Diffusion VAE to get started quickly. (It will auto-download).
+But if you want to train your own...
 
 ```bash
-python scripts/train_vqgan.py --config configs/pop909_config.yaml
+export CONFIG_FILE=configs/flowers_config.yaml 
+#export CONFIG_FILE=configs/midi_config.yaml 
+python scripts/train_vqgan.py --config $CONFIG_FILE
 ```
 
 The VQVAE compresses MIDI piano roll images into a quantized latent representation.
@@ -79,13 +82,13 @@ This will save checkpoints in the `checkpoints/` directory. Use that checkpoint 
 ### Pre-Encoding Data (with frozen augmentations)
 Takes about 15 minutes to run on a single GPU.
 ```bash
-python scripts/preencode_data.py --config configs/pop909_config.yaml --vqgan-checkpoint [your_vqgan_checkpoint.pt]
+python scripts/preencode_data.py --config $CONFIG_FILE
 ```
 
 ### Training the Flow Model
 
 ```bash
-python scripts/train_flow.py --config configs/pop909_config.yaml --vqgan-checkpoint [your_vqgan_checkpoint.pt]
+python scripts/train_flow.py --config $CONFIG_FILE
 ```
 
 The flow model operates in the latent space created by the VQVAE encoder.
@@ -99,10 +102,10 @@ python scripts/generate_samples.py --checkpoint models/flow_checkpoint.pt --outp
 
 This generates new samples by sampling from the flow model and decoding through the VQVAE.
 
-## Configuration
+# Contributing
 
-Model and training parameters can be customized by editing the YAML files in the `configs/` directory.
+Contributions are very much welcome!  Still getting this properly "set up" to welcome more people. (We'll have Contribitors Guidelines and Coding StyleGuide eventually.) For now, if you think something needs doing, it probably does!  PRs welcome. 
 
-## License
+# License
 
 This project is licensed under the terms of the MIT license.
