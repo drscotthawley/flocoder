@@ -5,6 +5,7 @@
 import os
 import re
 import math 
+import random
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -85,24 +86,25 @@ class EMA:
                 self.backup[name] = None
 
 
-def euler_sampler(model, shape, sample_N, device, eps=0.001, n_classes=0):
-    """quick and dirty integration using Euler method; not very accurate"""
-    model.eval()
-    #cond = torch.arange(10).repeat(shape[0] // 10).to(device) if condition else None
-    cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device) # this is for a 10x10 grid of outputs, with one class per column
-    with torch.no_grad():
-        z0 = torch.randn(shape, device=device) # gaussian noise
-        x = z0.detach().clone()
-
-        dt = 1.0 / sample_N
-        for i in range(sample_N):
-            num_t = i / sample_N * (1 - eps) + eps
-            t = torch.ones(shape[0], device=device) * num_t
-            pred = model(x, t * 999, cond)
-
-            x = x.detach().clone() + pred * dt
-        nfe = sample_N # number of function evaluations
-        return x.cpu(), nfe
+# def euler_sampler(model, shape, sample_N, device, eps=0.001, n_classes=0):
+#     """quick and dirty integration using Euler method; not very accurate"""
+#     model.eval()
+#     # Create a grid where each column is a single class (10 columns)
+#     cond = None
+#     if n_classes > 0:
+#         cond = torch.arange(min(10, n_classes), device=device).repeat_interleave(shape[0]//10)[:shape[0]]
+#         cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device)
+#     with torch.no_grad():
+#         z0 = torch.randn(shape, device=device)
+#         x = z0.detach().clone()
+#         dt = 1.0 / sample_N
+#         for i in range(sample_N):
+#             num_t = i / sample_N * (1 - eps) + eps
+#             t = torch.ones(shape[0], device=device) * num_t
+#             pred = model(x, t * 999, cond)
+#             x = x.detach().clone() + pred * dt
+#         nfe = sample_N
+#         return x.cpu(), nfe
 
 
 def to_flattened_numpy(x):
@@ -113,32 +115,36 @@ def from_flattened_numpy(x, shape):
     return torch.from_numpy(x.reshape(shape))
 
 
-def rk45_sampler(model, shape, device, eps=0.001, n_classes=0):
-    """Runge-Kutta '4.5' order method for integration. Source: Tadoa Yomaoka"""
+def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=5.0):
+    """Runge-Kutta '4.5' order method for integration. Source: Tadao Yamaoka"""
     rtol = atol = 1e-05
     model.eval()
-    if n_classes > 0: 
-        cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device) # this is for a 10x10 grid of outputs, with one class per column
-    else: 
-        cond = torch.zeros(10,).repeat(shape[0] // 10).to(device)
+    # Create a grid where each column is a single class (10 columns)
+    cond = None # the conditioning signal to the model
+    if n_classes > 0:
+        #cond = torch.arange(min(10, n_classes), device=device).repeat_interleave(shape[0]//10)[:shape[0]]
+        cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device)
+    
     with torch.no_grad():
+        # The rest remains the same
         z0 = torch.randn(shape, device=device)
         x = z0.detach().clone()
 
         def ode_func(t, x):
             x = from_flattened_numpy(x, shape).to(device).type(torch.float32)
             vec_t = torch.ones(shape[0], device=x.device) * t
-            drift = model(x, vec_t * 999)#, cond)
 
-            return to_flattened_numpy(drift)
+            # classifier-free guidance
+            v_cond = model(x, vec_t * 999, cond)
+            v_uncond = model(x, vec_t * 999, None)
+            velocity = v_uncond + cfg_scale * (v_cond - v_uncond) # cfg_scale ~= conditioning strength
 
+            return to_flattened_numpy(velocity)
+
+        # Rest of the implementation unchanged
         solution = integrate.solve_ivp(
-            ode_func,
-            (eps, 1),
-            to_flattened_numpy(x),
-            rtol=rtol,
-            atol=atol,
-            method="RK45",
+            ode_func, (eps, 1), to_flattened_numpy(x),
+            rtol=rtol, atol=atol, method="RK45",
         )
         nfe = solution.nfev
         x = torch.tensor(solution.y[:, -1]).reshape(shape).type(torch.float32)
@@ -165,10 +171,12 @@ def imshow(img, filename):
     pil_img.save(filename)
 
 
+
 def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="output"):
+    """Save image grid with consistent 10-column layout to match class conditioning"""
     filename = f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png"
+    # Use nrow=10 to ensure grid columns match our class conditioning
     img_grid = torchvision.utils.make_grid(img, nrow=10)
-    #print(f"img.shape = {img.shape}, img_grid.shape = {img_grid.shape}") 
     file_path = os.path.join(output_dir, filename)
     imshow(img_grid, file_path)
     name = f"demo/{tag}{method}"
@@ -179,28 +187,27 @@ def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="o
 @torch.no_grad()
 def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="", 
          images=None, use_wandb=True, output_dir="output", n_classes=0):
+    """Evaluate model by generating samples with class conditioning"""
     model.eval()
-    # saves sample generated images, unless images are passed through (target data)
-    # TODO: Refactor. this is janky. images are not the same as latents. 
-
-    shape = (batch_size, 4, 16, 16) # note we need to decode these too. 
+    # Use a batch size that's a multiple of 10 to ensure proper grid layout
+    # For a 10x10 grid, use batch_size = 100
+    batch_size=100 # hard code this for the image display; ignore other batch size values
+    shape = (batch_size, 4, 16, 16)
 
     if images is None:
         if method == "euler":
-            images, nfe = euler_sampler( model, shape=shape, sample_N=sample_N, device=device, n_classes=n_classes)
+            images, nfe = euler_sampler(model, shape=shape, sample_N=sample_N, device=device, n_classes=n_classes)
         elif method == "rk45":
             images, nfe = rk45_sampler(model, shape=shape, device=device, n_classes=n_classes)
     else:
         nfe=0
-    #save_img_grid(images, f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png")
-    if vae.is_sd: 
-        decoded_images = vae.decode(images.to(device)).sample
-    else:
-        decoded_images = vae.decode(images.to(device))
+
+    decoded_images = vae.decode(images.to(device))
+    if vae.is_sd: decoded_images = decoded_images.sample
+        
     save_img_grid(images.cpu(), epoch, method, nfe, tag=tag, use_wandb=use_wandb, output_dir=output_dir)
     save_img_grid(decoded_images.cpu(), epoch, method, nfe, tag=tag+"decoded_", use_wandb=use_wandb, output_dir=output_dir)
     return model.train()
-
 
 
 
@@ -219,23 +226,35 @@ def warp_time(t, dt=None, s=.5):
 
 def train_flow(args):
 
-    print(f"====================   data_path = {args.data}")
+    print(f"data_path = {args.data}")
 
     dataset = PreEncodedDataset(args.data) 
+    n_classes = args.n_classes
+    # If n_classes is not specifically set but the dataset has this info, use it
+    if n_classes <= 0 and hasattr(dataset, 'n_classes'):
+        n_classes = dataset.n_classes
+        print(f"Using dataset-provided n_classes: {n_classes}")
+    # If we're using conditioning but don't have class info, warn and disable
+    if args.condition and (n_classes is None or n_classes <= 0):
+        print("Warning: Conditioning requested but no class information available. Disabling conditioning.")
+        args.condition = False
+        n_classes = 0
+    condition = args.condition
+
+    print(f"Configuring model for {n_classes} classes, conditioning = {condition}\n")
+    C, H, W = 4, 16, 16 # TODO: read this from data!!
+
     train_dataloader = DataLoader(
         dataset=dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=12,
-        pin_memory=True
+        pin_memory=True,
+        persistent_workers=True,
     )
     dataloader = train_dataloader # alias to avoid errors later
 
-    n_classes, condition = args.n_classes, args.condition
-    C, H, W = 4, 16, 16 # TODO: read this from data!!
-
-
-    print(f"Configuring model for {n_classes} classes\n")
+    
     output_dir = f"output_midi-sd-{H}x{W}" # TODO: fix this so it reads from data!!
     os.makedirs(output_dir, exist_ok=True)
 
@@ -254,12 +273,12 @@ def train_flow(args):
         print(f"Loading (VQ)VAE checkpoint from HuggingFace Diffusers")
         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
         vae.is_sd = True
-        vae.scaling_factor = 0.18215  # SD's standard scaling factor
+        vae.scaling_factor = 1.0 # this is wrong -> 0.18215  # SD's standard scaling factor
         if args.image_size % 8 != 0:
             print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {args.image_size}")
     else:
         from flocoder.models.vqvae import VQVAE
-        vqvae = VQVAE(
+        vae = VQVAE(
             in_channels=3,
             hidden_channels=args.hidden_channels,
             num_downsamples=args.num_downsamples,
@@ -294,6 +313,8 @@ def train_flow(args):
         #use_checkpoint=True,
     )
     model.to(device)
+    print(f"Model conditioning enabled: {hasattr(model, 'condition') and model.condition}")
+    print(f"Model has cond_mlp: {hasattr(model, 'cond_mlp')}")
     #model_cp_file = "model_epoch_2300.pt"
     #checkpoint = torch.load(model_cp_file, map_location=device, weights_only=True)
     #model.load_state_dict(checkpoint)
@@ -312,7 +333,8 @@ def train_flow(args):
         model.train()
         pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{args.epochs}:')
         for batch, cond in pbar:
-            batch = batch.to(device)
+            batch, cond = batch.to(device), cond.to(device)
+            if random.random() < 0.1: cond = None # for classifier-free guidance: 10% chance of unconditioned training
             target = batch # alias
 
             optimizer.zero_grad()
@@ -323,18 +345,9 @@ def train_flow(args):
 
             t_expand = t.view(-1, 1, 1, 1).repeat(  1, batch.shape[1], batch.shape[2], batch.shape[3] )
             perturbed_data = t_expand * batch + (1 - t_expand) * source
-            # target = batch - source # velocity
-
-            # score = model(
-            #     perturbed_data, t * 999, cond.to(device) if condition else None
-            # )
-
-            # losses = torch.square(score - target)
-            # losses = torch.mean(losses.reshape(losses.shape[0], -1), dim=-1)
-            # loss = torch.mean(losses)
 
             v_guess = target - source  #batch - z0
-            v_model = model(  perturbed_data, t * 999, cond.to(device) if condition else None )
+            v_model = model(perturbed_data, t * 999, cond)
             loss = loss_fn(v_model, v_guess)
 
             loss.backward()
@@ -358,7 +371,7 @@ def train_flow(args):
             ema.update()
 
 
-        if (epoch < 10 and epoch %2==0 and epoch>0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): # evals every 1 at beginning, then every 20 later
+        if (epoch < 10 and epoch %1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): # evals every 2 at beginning, then every 20 later
             print("Generating sample outputs...")
             images = batch[:100].cpu()
             batch, score, target = None, None, None
@@ -455,7 +468,10 @@ def parse_args_with_config():
     parser.add_argument('--n-classes', type=int, 
                        default=config.get('n-classes', 0), 
                        help='number of classes (for class-conditioned training)')
-    
+    parser.add_argument('--condition', type=lambda x: str(x).lower() == 'true', 
+                   default=config.get('condition', False),
+                   help='whether to include conditioning (true/false)')
+   
     # vq parameters
     parser.add_argument('--vqgan-checkpoint', type=str, 
                        default=config.get('vqgan-checkpoint', None), 
@@ -488,7 +504,6 @@ def parse_args_with_config():
     parser.add_argument('--run-name', type=str, 
                        default=config.get('run-name', None), 
                        help='WandB run name')
-    parser.add_argument('--condition', action='store_true', help='whether to include conditioning')
     parser.add_argument('--no-grad-ckpt', action='store_true', 
                        help='disable gradient checkpointing')
     

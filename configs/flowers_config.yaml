@@ -60,10 +60,10 @@ flow:
         num_channels: 256
         num_residuals: 2
         n_classes: 102
-        condition: True
+        condition: true
     training: 
-        batch_size: 4096
-        learning_rate: 1e-4
+        batch_size: 2048
+        learning_rate: 2e-4
         num_epochs: 10000
         # can add more later 
 

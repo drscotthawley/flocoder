@@ -15,9 +15,7 @@ import threading
 import time
 import sys
 
-
 from torchvision import transforms, datasets
-
 
 from flocoder.data.datasets import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
 from flocoder.data.dataloaders import RandomRoll, create_image_loaders, midi_transforms, image_transforms
@@ -29,7 +27,6 @@ def generate_random_string(length=6):
 
 
 class PreEncoder:
-    # only reason this is a class instead of a "def" is because Claude made it that way ;-) -SHH
     def __init__(self, vae, data_path, output_dir, image_size=128, max_storage_gb=50, num_workers=None, batch_size=100, device='cuda'):
         self.vae = vae
         self.output_dir = Path(output_dir).expanduser().absolute()
@@ -41,8 +38,6 @@ class PreEncoder:
         self.file_size = None
         self.device = device
     
-    # Rest of initialization code...
-
         # Automatically determine optimal number of workers based on system
         if num_workers is None:
             # Use 75% of available cores, but ensure we don't go too high
@@ -82,46 +77,10 @@ class PreEncoder:
                 batch = 2 * batch - 1  # If images are [0, 1], convert to [-1, 1]  
             latents = self.vae.encode(batch).latent_dist.mean
             return latents * self.vae.scaling_factor   # SD uses this scaling factor to make latents closer to N(0,1)
-        
-    
-    # def save_encodings(self, encoded_batch, filenames):
-    #     """Save an entire batch of encoded tensors as a single file."""
-    #     # Generate a unique batch identifier
-    #     batch_id = generate_random_string(8)
-        
-    #     # Create batch data structure
-    #     batch_data = {
-    #         'encodings': encoded_batch,
-    #         'filenames': filenames,
-    #         'timestamp': time.time(),
-    #         'batch_id': batch_id
-    #     }
-    #     assert encoded_batch.shape[0] == self.batch_size, f"Batch size mismatch: {encoded_batch.shape[0]} != {self.batch_size}"
-        
-    #     # Create filename for the batch
-    #     out_path = self.output_dir / f"batch_{batch_id}.pt"
-        
-    #     # Save the batch as a single file
-    #     torch.save(batch_data, out_path)
-        
-    #     # Update storage tracking
-    #     file_size = os.path.getsize(out_path)
-    #     with self.storage_lock:
-    #         self.current_storage += file_size
-        
-    #     # Periodically check total directory size (less frequent now that we have fewer files)
-    #     if random.random() < 0.01:  # 1% chance
-    #         total = sum(
-    #             os.path.getsize(f) for f in self.output_dir.glob('**/*')
-    #             if f.is_file()
-    #         )
-    #         if total > self.current_storage:
-    #             self.current_storage = total
-
 
 
     def process_dataset(self, augs_per=512):
-        """Process dataset with optimized batch processing."""
+        """Process dataset with parallel processing and threaded file saving."""
         print(f"Processing dataset with {self.dataset.actual_len} images")
         
         # Enable pinned memory for faster CPU->GPU transfers
@@ -133,7 +92,7 @@ class PreEncoder:
             persistent_workers=True,
             prefetch_factor=2,  # Prefetch batches
         )
-        max_batches = (augs_per * self.dataset.actual_len + 1 )// self.batch_size
+        max_batches = (augs_per * self.dataset.actual_len + 1) // self.batch_size
         print(f"Max batches to process: {max_batches}")
         
         print(f"\n{'='*80}")
@@ -144,73 +103,79 @@ class PreEncoder:
         print(f"Average number of augmentations per image: {augs_per}")
         print(f"{'='*80}")
         
-        # Create a progress bar
-        with tqdm(total=max_batches, desc=f"Processing batches [0.00/{self.max_storage_bytes/1024**3:.1f} GB (0%)]") as pbar:
-            # Process batches with prefetching
-            batch_buffer = []
-            buffer_size = 5  # Buffer several batches for bulk processing
-            
-            for batch_idx, (images, classes) in enumerate(dataloader):
-                if batch_idx >= max_batches:
-                    break
+        # Create a thread pool for file I/O
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            # Create a progress bar
+            with tqdm(total=max_batches, desc=f"Processing batches [0.00/{self.max_storage_bytes/1024**3:.1f} GB (0%)]") as pbar:
+                for batch_idx, (images, classes) in enumerate(dataloader):
+                    if batch_idx >= max_batches:
+                        break
+                        
+                    if self.current_storage >= self.max_storage_bytes:
+                        print(f"\nStorage limit reached: {self.current_storage/1024**3:.2f} GB")
+                        break
                     
-                if self.current_storage >= self.max_storage_bytes:
-                    print(f"\nStorage limit reached: {self.current_storage/1024**3:.2f} GB")
-                    break
-                
-                # Process batch
-                encoded_batch = self.encode_batch(images)
-                
-                # Add to buffer
-                batch_filenames = [f"sample_{batch_idx}_{i}_{generate_random_string(4)}" 
-                                for i in range(images.size(0))]
-                batch_buffer.append((encoded_batch, classes, batch_filenames))
-                
-                # Process buffer when full
-                if len(batch_buffer) >= buffer_size:
-                    self._process_batch_buffer(batch_buffer)
-                    batch_buffer = []
+                    # Process batch
+                    encoded_batch = self.encode_batch(images)
+                    
+                    # Submit file saving tasks to thread pool
+                    future_to_filename = {}
+                    
+                    # Process each sample in the batch
+                    for i in range(encoded_batch.shape[0]):
+                        # Get single encoding and class
+                        encoding = encoded_batch[i].cpu()  # Move to CPU for saving
+                        class_idx = classes[i].item() if isinstance(classes, torch.Tensor) else classes
+                        
+                        # Create filename with class info and use hierarchical directories
+                        sample_id = f"{batch_idx}_{i}"
+                        # Use first 2 digits as subdirectory to avoid too many files in one dir
+                        sub_dir = f"{batch_idx % 100:02d}"
+                        sub_dir_path = self.output_dir / sub_dir
+                        
+                        # Create subdirectory if it doesn't exist
+                        if not sub_dir_path.exists():
+                            sub_dir_path.mkdir(exist_ok=True)
+                        
+                        # Include class in filename only if we have class info
+                        if hasattr(self.dataset, 'n_classes') and self.dataset.n_classes > 0:
+                            filename = f"sample_{sample_id}_class{class_idx}_{generate_random_string(4)}.pt"
+                        else:
+                            filename = f"sample_{sample_id}_{generate_random_string(4)}.pt"
+                            
+                        out_path = sub_dir_path / filename
+                        
+                        # Submit save task to thread pool
+                        future = executor.submit(torch.save, encoding, out_path)
+                        future_to_filename[future] = out_path
+                    
+                    # Wait for all files in this batch to be saved and update storage
+                    batch_file_sizes = 0
+                    for future in concurrent.futures.as_completed(future_to_filename):
+                        filename = future_to_filename[future]
+                        try:
+                            # Get result (None for torch.save) and file size
+                            future.result()  # This will raise exception if save failed
+                            batch_file_sizes += os.path.getsize(filename)
+                        except Exception as e:
+                            print(f"Error saving {filename}: {e}")
+                    
+                    # Update storage tracking
+                    with self.storage_lock:
+                        self.current_storage += batch_file_sizes
+                    
+                    # Update progress
+                    if batch_idx % 1 == 0: # leave it at 1 for accurate timing estimates
+                        storage_pct = int(self.current_storage * 100 / self.max_storage_bytes)
+                        pbar.set_description(
+                            f"Processing batches [{self.current_storage/1024**3:.2f}/{self.max_storage_bytes/1024**3:.1f} GB ({storage_pct}%)]"
+                        )
+                        pbar.update(1)
                     
                     # Force CUDA synchronization and garbage collection
                     torch.cuda.synchronize()
                     if batch_idx % 50 == 0:  # Don't do this too often
                         torch.cuda.empty_cache()
-                
-                # Update progress
-                if batch_idx % 1 == 0: # leave it at 1 for accurate timing estimates
-                    storage_pct = int(self.current_storage * 100 / self.max_storage_bytes)
-                    pbar.set_description(
-                        f"Processing batches [{self.current_storage/1024**3:.2f}/{self.max_storage_bytes/1024**3:.1f} GB ({storage_pct}%)]"
-                    )
-                    pbar.update(1)
-            
-            # Process remaining batches
-            if batch_buffer:
-                self._process_batch_buffer(batch_buffer)
-
-
-    def _process_batch_buffer(self, batch_buffer):
-        """Process multiple batches efficiently."""
-        # Combine batches into larger chunks for fewer file operations
-        combined_batch_id = generate_random_string(8)
-        combined_data = {
-            'encodings': [item[0] for item in batch_buffer],
-            'classes':   [item[1] for item in batch_buffer],
-            'filenames': [item[2] for item in batch_buffer],
-            'timestamp': time.time(),
-            'batch_id': combined_batch_id
-        }
-        
-        # Create filename for the combined batch
-        out_path = self.output_dir / f"batch_{combined_batch_id}.pt"
-        
-        # Save combined data
-        torch.save(combined_data, out_path)
-        
-        # Update storage tracking
-        with self.storage_lock:
-            self.file_size = os.path.getsize(out_path)
-            self.current_storage += self.file_size
 
 
 def parse_args_with_config():
@@ -304,8 +269,6 @@ def parse_args_with_config():
     return args 
 
 
-
-
 def preencode_data():
     # cuda setups for speed
     torch.cuda.empty_cache()
@@ -328,7 +291,7 @@ def preencode_data():
         print(f"Loading (VQ)VAE checkpoint from HuggingFace Diffusers")
         vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
         vae.is_sd = True
-        vae.scaling_factor = 1.0 # THIS IS WRONG---> 0.18215  # SD's standard scaling factor
+        vae.scaling_factor = 1.0  # Use 1.0 as the scaling factor to avoid mangling
         if args.image_size % 8 != 0:
             print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {args.image_size}")
     else:
@@ -360,9 +323,7 @@ def preencode_data():
         print(f"Skipping execution to avoid overwriting it.")
         print(f"If you want to generate new data, either remove {args.output_dir} or choose a different --output-dir")
         sys.exit(1)
-    #encoder.process_dataset(args.augmentations_per_image, batch_size=args.batch_size)
     encoder.process_dataset(augs_per=args.augs_per)
 
 if __name__ == "__main__":
     preencode_data()
-

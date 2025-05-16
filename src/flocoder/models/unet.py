@@ -261,7 +261,7 @@ class Unet(nn.Module):
         r = x.clone()
 
         t = self.time_mlp(time)
-        if self.condition:
+        if self.condition and cond is not None:
             t += self.cond_mlp(cond)
 
         h = []

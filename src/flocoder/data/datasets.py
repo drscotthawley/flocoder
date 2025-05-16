@@ -195,59 +195,68 @@ class InfiniteDataset(IterableDataset):
             yield self.dataset[idx]
 
 
-
 class PreEncodedDataset(Dataset):
     """for data pre-encoded by the Encoder of the VQVAE model"""
-    def __init__(self, data_dir="/data/encoded-POP909"):
+    def __init__(self, data_dir="/data/encoded-POP909", max_cache_items=10000):
         self.data_dir = Path(data_dir)
-        self.files = list(self.data_dir.glob("*.pt"))
-
-        # Extract class number from first file to determine number of classes
-        sample_file = self.files[0].name
-        pattern = re.compile(r'.*_(\d+)_.*\.pt')
-
+        
+        # Use fast_scandir for better performance instead of glob
+        subdirs, files = fast_scandir(str(self.data_dir), ['pt'])
+        self.files = [Path(f) for f in files]
+        
+        # Extract class from filenames using regex
+        #pattern = re.compile(r'.*_class(\d+)_.*\.pt')
+        pattern = re.compile(r'sample_\d+_(\d+)_[a-z0-9]+\.pt')
+        
         # Get all unique class numbers to determine total number of classes
         self.class_numbers = set()
         for f in self.files:
             match = pattern.match(f.name)
             if match:
                 self.class_numbers.add(int(match.group(1)))
-
-        self.n_classes = len(self.class_numbers)
-        print(f"Found {len(self.files)} encoded samples across {self.n_classes} classes")
+        
+        self.n_classes = len(self.class_numbers) if self.class_numbers else 0
+        #print(f"Found {len(self.files)} encoded samples across {self.n_classes} classes")
+        
+        # Initialize cache for faster access
+        self.cache = {}
+        self.max_cache_items = max_cache_items
+        print(f"Using memory cache with max {max_cache_items} items")
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
+        # Check if item is in cache
+        if idx in self.cache:
+            return self.cache[idx]
+        
+        # If not in cache, load from disk
         file_path = self.files[idx]
 
-        # Load encoded tensor to CPU and detach from computation graph
-        encoded = torch.load(file_path, map_location='cpu', weights_only=True)
+        # Extract class from filename if present
+        #match = re.match(r'.*_class(\d+)_.*\.pt', file_path.name)
+        match = re.match(r'sample_\d+_(\d+)_[a-z0-9]+\.pt', file_path.name)
+        class_idx = int(match.group(1)) if match else 0
+        #print(f"Loaded sample from {file_path.name} with class_idx: {class_idx}")
         
-        if isinstance(encoded, dict):  # encoded data may be in little batches.
-            classes = encoded['classes']
-            encoded = encoded['encodings']
-            
-        if isinstance(encoded, list):
-            i = random.randint(0, len(encoded)-1)
-            assert i<len(encoded) and len(encoded)==len(classes), f"i = {i}, len(encoded) = {len(encoded)}, len(classes) = {len(classes)}"
-            classes = classes[i]
-            encoded = encoded[i]  # Select one encoding from the list
+        # Load the encoded tensor directly
+        encoded = torch.load(file_path, map_location='cpu')
         
-        # Handle batch dimension if present
-        if len(encoded.shape) > 3:
-            i = random.randint(0, encoded.shape[0]-1)  
-            encoded = encoded[i]  # Select a single item from the batch
-            try:
-                classes = classes[i]
-            except e:
-                print("i = ",i,", encoded.shape = ",encoded.shape,", classes.shape = ",classes.shape)
-                assert False
+        # Create the return tuple
+        item = (encoded, torch.tensor(class_idx, dtype=torch.long))
         
-        return encoded, classes
-
-
+        # Add to cache if not full
+        if len(self.cache) < self.max_cache_items:
+            self.cache[idx] = item
+        # If cache is full, replace a random item
+        # This is simpler than LRU and still effective for random access patterns
+        elif random.random() < 0.01:  # 1% chance to replace an existing cache item
+            random_key = random.choice(list(self.cache.keys()))
+            del self.cache[random_key]
+            self.cache[idx] = item
+        
+        return item
 
 # for testing 
 if __name__ == "__main__":
