@@ -62,6 +62,10 @@ The project is organized as follows:
 - `notebooks/`: Jupyter notebooks for tutorials and examples
 - `tests/`: Unit tests
 
+## Quickstart
+
+Head over to [`notebooks/SD_Flower_Flow.ipynb`](https://github.com/drscotthawley/flocoder/blob/main/notebooks/SD_Flower_Flow.ipynb) and run through it for a taste. It will run on Colab. 
+
 ## Training
 
 The package includes several training scripts located in the `scripts/` directory:
