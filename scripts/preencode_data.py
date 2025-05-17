@@ -232,7 +232,7 @@ def parse_args_with_config():
                       help='number of augmented versions to create per image')
     parser.add_argument('--num_workers', type=int, default=config.get('num-workers', None),
                       help='number of workers for data loading')
-    parser.add_argument('--image_size', type=int, default=128,
+    parser.add_argument('--image_size', type=int, default=config.get('image-size', 128),
                       help='size to resize images to')
     parser.add_argument('--batch_size', type=int, default=config.get('batch-size', None),
                       help='batch size for processing')
