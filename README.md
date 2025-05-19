@@ -4,7 +4,7 @@
 
 # Flocoder
 
-This is a teaching and research package for exploring latent generative flow matching models. (The name is inspired by "vocoder.")
+This is a (Work In Progress!) teaching and research package for exploring latent generative flow matching models. (The name is inspired by "vocoder.")
 
 This project initially started as a way to provide a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but `flocoder` designed to work on more general datasets too. 
 
