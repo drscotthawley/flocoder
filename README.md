@@ -116,14 +116,14 @@ This generates new samples by sampling from the flow model and decoding through 
 
 # Contributing
 
-Contributions are welcome!  Still getting this properly "set up" to welcome more people. (We'll have Contribitors Guidelines and Coding StyleGuide eventually.) For now, if you think something needs doing, it probably does!  PRs welcome. 
+Contributions are welcome!  Still getting this properly "set up" to welcome more people. (We'll have Contribitors Guidelines eventually.) For now, if you think something needs doing, it probably does!  PRs welcome. 
 
 # TODO
 
 - [x] Add Discussions area
 - [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc. This was written quickly. 
 - [ ] Contributor Guidelines
-- [ ] Style Guide
+- [x] Style Guide
 - [ ] Standalone sampler script
 - [ ] Documentation
 - [ ] Improve overall introduction/orientation
