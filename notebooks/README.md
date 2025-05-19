@@ -1,6 +1,8 @@
 # Notebooks
 
-Work in progress! 
+See above for complete list
+
+* [SD_Flower_Flow.ipynb](SD_Flower_Flow.ipynb) - A walktrough of training a flow matching model in the latent space of the (pretrained) Stable Diffusion VAE
 
 ## Project Overview
 
