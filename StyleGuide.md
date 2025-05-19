@@ -1,4 +1,4 @@
-# Style Guide
+# Coding Style Guide
 
 This repo is intended to facilitate *teaching* and open-ended *experimentation*.  (It is not intended for optimal performance in deployment.) Thus the code should be easy to follow, easy to take in "at a glance", easy to trace the execution, and easy to see where to modify something to add new behavior, *without having to consult lengthy documentation on Class methods and/or scheduling, or diving through multiple levels of inheritance and/or imports*. 
 
