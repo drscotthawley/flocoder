@@ -1,4 +1,8 @@
-# <img src="images/logo.png" width="80px"> Flocoder
+<p align="center">
+  <img src="images/logo.png" width="135px">
+</p>
+
+# Flocoder
 
 This is a teaching and research package for exploring latent generative flow matching models. (The name is inspired by "vocoder.")
 
