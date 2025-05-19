@@ -24,7 +24,7 @@ from tqdm.auto import tqdm
 from PIL import Image
 from pathlib import Path
 
-from flocoder.models.unet import Unet
+from flocoder.models.unet import Unet, MRUnet
 #from flocoder.models.vqvae import VQVAE
 from flocoder.data.datasets import PreEncodedDataset, InfiniteDataset
 from flocoder.utils.general import save_checkpoint, keep_recent_files
@@ -115,7 +115,7 @@ def from_flattened_numpy(x, shape):
     return torch.from_numpy(x.reshape(shape))
 
 
-def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=5.0):
+def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=3.0):
     """Runge-Kutta '4.5' order method for integration. Source: Tadao Yamaoka"""
     rtol = atol = 1e-05
     model.eval()
@@ -192,7 +192,8 @@ def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="
     # Use a batch size that's a multiple of 10 to ensure proper grid layout
     # For a 10x10 grid, use batch_size = 100
     batch_size=100 # hard code this for the image display; ignore other batch size values
-    shape = (batch_size, 4, 16, 16)
+    shape = (batch_size, 4, 16, 16) # TODO: this needs tobe inferred
+    shape = (batch_size, 4, 4, 4) # TODO: this needs tobe inferred
 
     if images is None:
         if method == "euler":
@@ -304,7 +305,7 @@ def train_flow(args):
 
     print("(vq)vae model ready")
 
-    model = Unet(
+    model = MRUnet(
         dim=H,
         channels=C,
         dim_mults=(1, 2, 4),
@@ -334,7 +335,7 @@ def train_flow(args):
         pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{args.epochs}:')
         for batch, cond in pbar:
             batch, cond = batch.to(device), cond.to(device)
-            if random.random() < 0.1: cond = None # for classifier-free guidance: 10% chance of unconditioned training
+            if random.random() < 0.1: cond = None # for classifier-free guidance: turn off cond signal sometimes
             target = batch # alias
 
             optimizer.zero_grad()
@@ -349,6 +350,9 @@ def train_flow(args):
             v_guess = target - source  #batch - z0
             v_model = model(perturbed_data, t * 999, cond)
             loss = loss_fn(v_model, v_guess)
+            lowres_v_guess = model.shrinker(v_guess)
+            lowres_loss = loss_fn(model.bottleneck_target_hook, lowres_v_guess) # compare with hook
+            loss = loss + args.lambda_lowres* lowres_loss
 
             loss.backward()
 
@@ -506,6 +510,8 @@ def parse_args_with_config():
                        help='WandB run name')
     parser.add_argument('--no-grad-ckpt', action='store_true', 
                        help='disable gradient checkpointing')
+    parser.add_argument('--lambda-lowres', type=float, default=config.get('lambda-lowres', 0.1), 
+                       help='weighting for low-resolution/bottleneck loss')
     
     # Parse args
     args = parser.parse_args()

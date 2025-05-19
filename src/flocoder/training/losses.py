@@ -7,6 +7,20 @@ from flocoder.models.patch_discriminator import PatchDiscriminator
 
 # Note: not all of these actually get used; and/or can be affected via config.lamba_* values 
 
+
+from geomloss import SamplesLoss
+sinkhorn_fn = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)
+
+def sinkhorn_loss(target, gen, max_B=128, device='cuda'):
+    # usage: metrics['sinkhorn'] = sinkhorn_loss(target, integrator_outputs)
+    # max_B limits eval batch size bc Sinkhorn calc can be slow, max_B=None means use whole batch
+    assert target.shape == gen.shape, f"target.shape {target.shape} != gen.shape {gen.shape}"
+    B = target.shape[0] if max_B is None else min(target.shape[0], max_B) 
+    t_vec, g_vec = [x[:B].reshape(B, -1).to(device) for x in (target, gen)]
+    return sinkhorn_fn(t_vec, g_vec).item()
+
+
+
 def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, 3, H, W] tensor of predicted probabilities 
                                  target,                # target: [B, 3, H, W] tensor of ground truth RGB where:
                                                             # - black = [0,0,0] (background)

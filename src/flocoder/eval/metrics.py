@@ -1,6 +1,30 @@
 import torch 
 import math
 
+from torchmetrics.image.fid import FrechetInceptionDistance
+fid_metric = FrechetInceptionDistance(feature=2048).cuda()  # or .to(device)
+
+@torch.no_grad()
+def fid_score(real, fake, device='cuda'):
+    real, fake = real.to(device), fake.to(device)
+
+    def to_uint8(x):
+        x = x.clone()
+        x -= x.amin(dim=(1,2,3), keepdim=True)
+        x /= x.amax(dim=(1,2,3), keepdim=True).clamp(min=1e-5)
+        x = (x * 255).clamp(0, 255).to(torch.uint8)
+        return x
+
+    real_uint8 = to_uint8(real)
+    fake_uint8 = to_uint8(fake)
+
+    fid_metric.reset()
+    fid_metric.update(real_uint8, real=True)
+    fid_metric.update(fake_uint8, real=False)
+    return fid_metric.compute().item()
+
+
+# TODO: some of these are already defined elsewhere; import
 def rgb2g(img_t):
    """Convert RGB piano roll to grayscale float where: BLACK->0, RED->1.0, GREEN->0.5
    Changes image from [3,H,W] to [1,H,W], and can include batch dimension."""
