@@ -85,9 +85,9 @@ You can use use the Stable Diffusion VAE to get started quickly. (It will auto-d
 But if you want to train your own...
 
 ```bash
-export CONFIG_FILE=configs/flowers_config.yaml 
-#export CONFIG_FILE=configs/midi_config.yaml 
-./train_vqgan.py --config $CONFIG_FILE
+export CONFIG_FILE=flowers.yaml 
+#export CONFIG_FILE=midi.yaml 
+./train_vqgan.py --config-name $CONFIG_FILE
 ```
 
 The VQVAE compresses MIDI piano roll images into a quantized latent representation.
@@ -96,13 +96,13 @@ This will save checkpoints in the `checkpoints/` directory. Use that checkpoint 
 ### Pre-Encoding Data (with frozen augmentations)
 Takes about 20 minutes to run on a single GPU.
 ```bash
-./preencode_data.py --config $CONFIG_FILE
+./preencode_data.py --config-name $CONFIG_FILE
 ```
 
 ### Training the Flow Model
 
 ```bash
-./train_flow.py --config $CONFIG_FILE
+./train_flow.py --config-name $CONFIG_FILE
 ```
 
 The flow model operates in the latent space created by the VQVAE encoder.
