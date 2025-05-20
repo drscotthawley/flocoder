@@ -138,14 +138,13 @@ def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="o
 
 @torch.no_grad()
 def eval(model, codec, epoch, method, device, sample_N=None, batch_size=100, tag="", 
-         images=None, use_wandb=True, output_dir="output", n_classes=0):
+         images=None, use_wandb=True, output_dir="output", n_classes=0, latent_shape=(4,16,16)):
     """Evaluate model by generating samples with class conditioning"""
     model.eval()
     # Use a batch size that's a multiple of 10 to ensure proper grid layout
     # For a 10x10 grid, use batch_size = 100
     batch_size=100 # hard code this for the image display; ignore other batch size values
-    shape = (batch_size, 4, 16, 16) # TODO: this needs to be inferred
-    shape = (batch_size, 4, 4, 4) # TODO: this needs to be inferred
+    shape = (batch_size)+latent_shape
 
     if images is None:
         if method == "euler":
@@ -190,6 +189,10 @@ def train_flow(cfg):
     print(f"data_path = {data_path}")
 
     dataset = PreEncodedDataset(data_path) 
+    sample_item, _ = dataset[0]
+    latent_shape = sample_item.shape
+    C, H, W = latent_shape
+    print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
     
     # If n_classes is not specifically set but the dataset has this info, use it
     if n_classes <= 0 and hasattr(dataset, 'n_classes'):
@@ -203,7 +206,7 @@ def train_flow(cfg):
         n_classes = 0
 
     print(f"Configuring model for {n_classes} classes, conditioning = {condition}\n")
-    C, H, W = 4, 16, 16 # TODO: read this from data!!
+    #C, H, W = 4, 16, 16 # TODO: read this from data!!
 
     train_dataloader = DataLoader(
         dataset=dataset,
@@ -267,9 +270,11 @@ def train_flow(cfg):
             v_guess = target - source  #batch - z0
             v_model = model(perturbed_data, t * 999, cond)
             loss = loss_fn(v_model, v_guess)
-            lowres_v_guess = model.shrinker(v_guess)
-            lowres_loss = loss_fn(model.bottleneck_target_hook, lowres_v_guess) # compare with hook
-            loss = loss + lambda_lowres * lowres_loss
+        
+            if hasattr(model,'shrinker'):  # if multiresolution is available
+                lowres_v_guess = model.shrinker(v_guess)
+                lowres_loss = loss_fn(model.bottleneck_target_hook, lowres_v_guess) # compare with hook
+                loss = loss + lambda_lowres * lowres_loss
 
             loss.backward()
 
@@ -301,10 +306,12 @@ def train_flow(cfg):
             batch, score, target = None, None, None
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval(model, codec, epoch, "target_data", device, tag="", images=images, use_wandb=use_wandb, output_dir=output_dir, n_classes=n_classes)
-            eval(model, codec, epoch, "rk45", device, tag="", use_wandb=use_wandb, output_dir=output_dir, n_classes=n_classes)
+            eval_kwargs = {'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
+               'latent_shape': latent_shape, 'batch_size': 100}
+            eval(model, codec, epoch, "target_data", device, tag="", images=images, **eval_kwargs)
+            eval(model, codec, epoch, "rk45", device, tag="", **eval_kwargs)
             ema.eval()
-            eval(model, codec, epoch, "rk45", device, tag="ema_", use_wandb=use_wandb, output_dir=output_dir, n_classes=n_classes)
+            eval(model, codec, epoch, "rk45", device, tag="ema_", **eval_kwargs)
             ema.train()
 
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs

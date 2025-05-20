@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - base
+  - vqgan
+  - flow
+  - preencoding
+  - _self_
+
+# Dataset-specific config - if not present this gets downloaded
+data: "~/datasets/Oxford_Flowers102/images"
+
+# Override specific settings
+codec:
+  choice: resize
+  latent_size: 16x16
+
+wandb:
+  project_name: "fc-flow-resize-flowers"
