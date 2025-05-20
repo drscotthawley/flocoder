@@ -500,24 +500,27 @@ class VQVAE(nn.Module):
 class SimpleResizeAE(nn.Module):
     """Just resizes tensors using bilinear interpolation. 
     For testing/exploration - reconstructions will be blocky/blurry."""
-    def __init__(self, latent_size=None, # Int or tuple for latent dimensions
+    def __init__(self, 
+                 latent_size=None,       # Int or tuple for latent dimensions
                  in_channels=3,          # Number of input channels (RGB default)
                  out_channels=None,      # Defaults to in_channels if None
                  orig_size=None,         # Size to decode back to if known 
                  extra_channel=True,     # tack on an extra (4th) encoded channel to mimic other latent reps
+                 mode='bicubic',         # interpolation/resampling mode
                  ): 
         super().__init__()
-        self.latent_size = latent_size
-        self.in_channels = in_channels
-        self.out_channels = out_channels if out_channels is not None else in_channels
-        self.orig_size = orig_size
+        self.latent_size   = latent_size
+        self.in_channels   = in_channels
+        self.out_channels  = out_channels if out_channels is not None else in_channels
+        self.orig_size     = orig_size
         self.extra_channel = extra_channel
+        self.mode          = mode
         
     def encode(self, x):
-        """Resize input to latent_size using bilinear interpolation."""
+        """Resize input to latent_size using interpolation."""
         if self.latent_size is None: return x
         h, w = (self.latent_size, self.latent_size) if isinstance(self.latent_size, int) else self.latent_size
-        small = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
+        small = F.interpolate(x, size=(h, w), mode=self.mode, align_corners=False)
         if not self.extra_channel: 
             return small
         mean_channel = torch.mean(small, dim=1, keepdim=True)
@@ -528,8 +531,8 @@ class SimpleResizeAE(nn.Module):
         target_size = orig_size if orig_size is not None else self.orig_size
         if target_size is None: return z  # Can't resize without target size
         h, w = (target_size, target_size) if isinstance(target_size, int) else target_size
-        # Only use the first 3 channels for decoding
-        return F.interpolate(z[:,:3], size=(h, w), mode='bilinear', align_corners=False)
+        # Only use the first 3 channels for decoding; extra channel is ignored
+        return F.interpolate(z[:,:3], size=(h, w), mode=self.mode, align_corners=False)
 
     
     def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
@@ -543,7 +546,7 @@ class SimpleResizeAE(nn.Module):
 
 
 
-class SDVAEWrapper(nn.Module):
+class SD_VAE_Wrapper(nn.Module):
     """Wrapper for Stable Diffusion VAE to make it compatible with our standard interface."""
     def __init__(self, pretrained_model_name="stabilityai/sd-vae-ft-mse"):
         super().__init__()
@@ -592,8 +595,8 @@ def load_codec(cfg, device):
         ).eval().to(device)
 
     elif cfg.codec.choice == "sd":
-        print("Loading SD VAE via SDWrapperAE")
-        codec = SDWrapperAE(
+        print("Loading SD VAE via SD_VAE_Wrapper")
+        codec = SD_VAE_Wrapper(
             pretrained_model_name="stabilityai/sd-vae-ft-mse"
         ).eval().to(device)
 

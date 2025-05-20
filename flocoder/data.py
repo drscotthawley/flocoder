@@ -334,6 +334,12 @@ def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_p
     if data_path is None or 'flowers' in data_path.lower(): # fall back to Oxford Flowers dataset
         train_base = datasets.Flowers102(root=data_path, split='train', transform=train_transforms, download=True)
         val_base = datasets.Flowers102(root=data_path, split='val', transform=val_transforms, download=True)
+    elif 'stl10' in str(data_path).lower():
+        train_base = datasets.STL10(root=data_path, split='train', transform=train_transforms, download=True)
+        val_base = datasets.STL10(root=data_path, split='test', transform=val_transforms, download=True)
+    elif 'food101' in str(data_path).lower():
+        train_base = datasets.Food101(root=data_path, split='train', transform=train_transforms, download=True)
+        val_base = datasets.Food101(root=data_path, split='test', transform=val_transforms, download=True)
     elif is_midi:
         train_base = MIDIImageDataset(split='train', transform=train_transforms, download=True, val_ratio=val_ratio)
         val_base = MIDIImageDataset(split='val', transform=val_transforms, download=True, val_ratio=val_ratio)

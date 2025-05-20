@@ -6,11 +6,6 @@ model:
     num_residuals: 2
     n_classes: 102
     condition: true
-training: 
-    batch_size: 2048
-    learning_rate: 2e-4
-    num_epochs: 10000
-    # can add more later 
 
 wandb:
     project_name: "flocoder-flow"

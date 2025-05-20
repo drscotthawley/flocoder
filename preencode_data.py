@@ -38,9 +38,13 @@ def encode_batch(codec, batch, device):
 
 def setup_dataset(data_path, image_size):
     """Set up and return the appropriate dataset based on the data path."""
+    transform = image_transforms(image_size=image_size)
     if data_path is None or 'flowers' in str(data_path).lower():
-        transform = image_transforms(image_size=image_size)
-        dataset = datasets.Flowers102(root=data_path, split='train', transform=transform, download=True)
+        dataset = datasets.Flowers102(root=data_path, split='train', transform=image_transform, download=True)
+    elif 'stl10' in str(data_path).lower():
+        dataset = datasets.STL10(root=data_path, split='train', transform=transform, download=True)
+    elif 'food101' in str(data_path).lower():
+        dataset = datasets.Food101(root=data_path, split='train', transform=transform, download=True)
     else: 
         transform = midi_transforms(image_size=image_size, random_roll=True)
         dataset = MIDIImageDataset(transform=transform, debug=True)
@@ -53,7 +57,7 @@ def setup_output_dir(output_dir):
     output_dir = Path(output_dir).expanduser().absolute()
     
     if output_dir.exists() and output_dir.is_dir():
-        print(f"Found existing directory {output_dir}. Aborting")
+        print(f"Found existing directory {output_dir}\nAborting. Delete that directory and try again.")
         sys.exit(1)
     
     print(f"Creating output directory {output_dir}")

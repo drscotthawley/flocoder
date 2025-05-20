@@ -2,6 +2,8 @@
 data: "~/datasets/Oxford_Flowers102/images"
 image_size: 128
 no_wandb: false
+wandb:
+    run_name: None
 
 vqgan:
     # Parameters specific to VQGAN 
@@ -34,8 +36,11 @@ preencoding:
 
 
 flow: 
-    # Parameters specific to flow model.
+    # Parameters specific to flow model
     # note: any encoding/decoding/visualization will likely read from the VQGAN section above
+    batch_size: 2048
+    learning_rate: 2e-4
+    epochs: 10000
     model: 
         num_layers: 8
         num_blocks: 4
@@ -44,12 +49,6 @@ flow:
         num_residuals: 2
         n_classes: 102
         condition: true
-    training: 
-        batch_size: 2048
-        learning_rate: 2e-4
-        num_epochs: 10000
-        # can add more later 
-
     wandb:
         project_name: "flocoder-flow-flowers"
         # run_name: "best to set via CLI"

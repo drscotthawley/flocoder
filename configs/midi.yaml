@@ -21,10 +21,9 @@ codec:
     project_name: "flocoder-vqgan-midi"
 
 flow:
+  batch_size: 256 
   model:
     n_classes: 0
     condition: false
-  training:
-    batch_size: 256 
   wandb:
     project_name: "flocoder-flow-midi"

@@ -176,7 +176,7 @@ def warp_time(t, dt=None, s=.5):
 def train_flow(cfg):
     # Extract parameters from config
     data_path = f"{cfg.data}_encoded_{cfg.codec.choice}"
-    batch_size = cfg.training.batch_size
+    batch_size = cfg.flow.batch_size
     n_classes = cfg.model.n_classes
     condition = cfg.model.condition
     lambda_lowres = cfg.training.get('lambda_lowres', 0.1)
@@ -325,7 +325,7 @@ def train_flow(cfg):
 handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
 def main(cfg: DictConfig) -> None:
-    print("Config keys:", list(cfg.keys()))     
+    print("Config:", cfg)     
     train_flow(cfg)
 
 
