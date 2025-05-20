@@ -80,14 +80,19 @@ The project is organized as follows:
 
 ## Training
 
-The package includes multiple training scripts located in main directory:
+The package includes multiple training scripts located in main directory.
+
+You can skip the autoencoder/"codec" training if you'd rather use the pretrained Stable Diffusion VAE, e.g. for what follows: 
+```bash
+export CONFIG_FILE=flowers_sd.yaml
+```
 
 ### Optional: Training a VQGAN
 You can use use the Stable Diffusion VAE to get started quickly. (It will auto-download).
 But if you want to train your own...
 
 ```bash
-export CONFIG_FILE=flowers.yaml 
+export CONFIG_FILE=flowers_vqgan.yaml 
 #export CONFIG_FILE=midi.yaml 
 ./train_vqgan.py --config-name $CONFIG_FILE
 ```
