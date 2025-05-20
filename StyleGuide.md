@@ -53,9 +53,4 @@ When we start to have way too many args & kwargs, its's acceptable to switch ove
 
 ## Note
 
-None of these guidelines are followed perfectly throughout the code.  Nevertheless, these are the soft constraints.
-
-**Exceptions** that could/should be brought to compliance:
-
-* Currently there's a plethora of files and subdirectories in the repo. Some may find this compartmentalization a welcome form of organization.  Others may find it needless and would prefer to flatten the structure. I (SHH) don't have a strong opintion -- this structure is what Claude suggested when I refactored the code. ;-) 
-* In `scripts/preencode_data.py` there's a class for no good reason.  Nothing is gained by having it be a class. We could change it.  Again, it's just what Claude did. ;-) 
+None of these guidelines are followed perfectly throughout the code.  Nevertheless, these are the "soft constraints".
