@@ -503,25 +503,34 @@ class SimpleResizeAE(nn.Module):
     def __init__(self, latent_size=None, # Int or tuple for latent dimensions
                  in_channels=3,          # Number of input channels (RGB default)
                  out_channels=None,      # Defaults to in_channels if None
-                 orig_size=None):        # Size to decode back to if known 
+                 orig_size=None,         # Size to decode back to if known 
+                 extra_channel=True,     # tack on an extra (4th) encoded channel to mimic other latent reps
+                 ): 
         super().__init__()
         self.latent_size = latent_size
         self.in_channels = in_channels
         self.out_channels = out_channels if out_channels is not None else in_channels
         self.orig_size = orig_size
+        self.extra_channel = extra_channel
         
     def encode(self, x):
         """Resize input to latent_size using bilinear interpolation."""
         if self.latent_size is None: return x
         h, w = (self.latent_size, self.latent_size) if isinstance(self.latent_size, int) else self.latent_size
-        return F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
-    
+        small = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
+        if not self.extra_channel: 
+            return small
+        mean_channel = torch.mean(small, dim=1, keepdim=True)
+        return torch.cat([small, mean_channel], dim=1)
+
     def decode(self, z, orig_size=None, noise_strength=0.0): # noise_strength unused, for API compatibility
         """Resize latent back to original dimensions."""
         target_size = orig_size if orig_size is not None else self.orig_size
         if target_size is None: return z  # Can't resize without target size
         h, w = (target_size, target_size) if isinstance(target_size, int) else target_size
-        return F.interpolate(z, size=(h, w), mode='bilinear', align_corners=False)
+        # Only use the first 3 channels for decoding
+        return F.interpolate(z[:,:3], size=(h, w), mode='bilinear', align_corners=False)
+
     
     def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
         """Encode and decode in one step, auto-storing original size."""
@@ -578,6 +587,7 @@ def load_codec(cfg, device):
         print("Using SimpleResizeAE")
         codec = SimpleResizeAE(
             latent_size=(cfg.get('latent_h', 16), cfg.get('latent_w', 16)),
+            orig_size=cfg.get('image_size',128),
             in_channels=3,
         ).eval().to(device)
 

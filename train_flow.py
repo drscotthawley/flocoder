@@ -144,7 +144,7 @@ def eval(model, codec, epoch, method, device, sample_N=None, batch_size=100, tag
     # Use a batch size that's a multiple of 10 to ensure proper grid layout
     # For a 10x10 grid, use batch_size = 100
     batch_size=100 # hard code this for the image display; ignore other batch size values
-    shape = (batch_size)+latent_shape
+    shape = (batch_size,)+latent_shape
 
     if images is None:
         if method == "euler":
@@ -190,7 +190,7 @@ def train_flow(cfg):
 
     dataset = PreEncodedDataset(data_path) 
     sample_item, _ = dataset[0]
-    latent_shape = sample_item.shape
+    latent_shape = tuple(sample_item.shape)
     C, H, W = latent_shape
     print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
     
