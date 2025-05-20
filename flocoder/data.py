@@ -11,7 +11,7 @@ from multiprocessing import Pool, cpu_count, set_start_method
 from functools import partial
 from tqdm import tqdm
 
-from pianoroll import midi_to_pr_img
+from .pianoroll import midi_to_pr_img
 
 # general utility
 def fast_scandir(
