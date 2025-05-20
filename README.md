@@ -26,7 +26,9 @@ Check out the sets of slides linked to on [`notebooks/README.md`](https://github
 
 <img src="images/flow_schematic.jpg" width="350" alt="MIDI Flow Architecture">
 
-The above diagram illustrates the architecture of our intended model: a VQVAE compresses MIDI data into a discrete latent space, while a flow model learns to generate new samples in the continuous latent space.  But we can also flow in the continuous space of a VAE like the one for Stable Diffusion. 
+The above diagram illustrates the architecture of our intended model: a VQVAE compresses MIDI data into a discrete latent space, while a flow model learns to generate new samples in the continuous latent space.  
+
+Though we can also flow in the continuous space of a VAE like the one for Stable Diffusion, which may be easier for starters. 
 
 ## Installation
 
@@ -80,7 +82,7 @@ The project is organized as follows:
 
 The package includes several training scripts located in the `scripts/` directory:
 
-### Optional Training a VQGAN
+### Optional: Training a VQGAN
 You can use use the Stable Diffusion VAE to get started quickly. (It will auto-download).
 But if you want to train your own...
 
