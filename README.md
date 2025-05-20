@@ -88,7 +88,7 @@ The VQVAE compresses MIDI piano roll images into a quantized latent representati
 This will save checkpoints in the `checkpoints/` directory. Use that checkpoint to pre-encode your data like so... 
 
 ### Pre-Encoding Data (with frozen augmentations)
-Takes about 15 minutes to run on a single GPU.
+Takes about 20 minutes to run on a single GPU.
 ```bash
 ./preencode_data.py --config $CONFIG_FILE
 ```
