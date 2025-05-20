@@ -120,7 +120,7 @@ This generates new samples by sampling from the flow model and decoding through 
 
 # Contributing
 
-Contributions are welcome!  Still getting this properly "set up" to welcome more people. (We'll have Contribitors Guidelines eventually.) For now, check the if you think something needs doing, it probably does!  Please review the [Style Guide](StyleGuide.md) and submit a Pull Request!  
+Contributions are welcome!  Still getting this properly "set up" to welcome more people. (We'll have Contribitors Guidelines eventually.) For now, if you think something needs doing, it probably does!  Please review the [Style Guide](StyleGuide.md) and submit a Pull Request!  
 
 # TODO
 
