@@ -176,7 +176,7 @@ def warp_time(t, dt=None, s=.5):
 
 def train_flow(cfg):
     # Extract parameters from config
-    data_path = cfg.data+"_encoded"
+    data_path = f"{cfg.data}_encoded_{cfg.codec.choice}"
     batch_size = cfg.training.batch_size
     n_classes = cfg.model.n_classes
     condition = cfg.model.condition
