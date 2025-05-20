@@ -123,15 +123,20 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 # TODO
 
 - [x] Add Discussions area
-- [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc. This was written quickly. 
-- [ ] Contributor Guidelines
-- [x] Style Guide
-- [ ] Standalone sampler script
-- [ ] In training/elsewhere: rename "vae"/"vqvae"/"vqgan" (lowercase only) variable as just "autoencoder"
-- [ ] Documentation
-- [ ] Move custom config/CLI arg system to Hydra or other package
+- [x] Add Style Guide
+- [x] Replace custom config/CLI arg system with Hydra or other package
+- [x] Rename "vae"/"vqvae"/"vqgan" variable as just "codec"
+- [x] Replace Class in `preencode_data.py` with functions as per Style Guide 
+- [ ] Add Contributor Guidelines
+- [ ] Add Standalone sampler script / Gradio demo?
+- [ ] Add Documentation
 - [ ] Improve overall introduction/orientation
-
+- [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc.
+- [ ] Research: Figure out why conditioning fails for latent model
+- [ ] Research: Figure out how to accelerate training!
+- [ ] Ops: Add tests
+- [ ] Ops: Add CI
+      
 
 # Acknowledgement
 
