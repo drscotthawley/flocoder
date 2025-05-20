@@ -92,7 +92,7 @@ export CONFIG_FILE=flowers.yaml
 ./train_vqgan.py --config-name $CONFIG_FILE
 ```
 
-The VQVAE compresses MIDI piano roll images into a quantized latent representation.
+The autoencoder AKA "codec" (e.g. VQGAN) compresses roll images into a quantized latent representation.
 This will save checkpoints in the `checkpoints/` directory. Use that checkpoint to pre-encode your data like so... 
 
 ### Pre-Encoding Data (with frozen augmentations)
@@ -107,7 +107,7 @@ Takes about 20 minutes to run on a single GPU.
 ./train_flow.py --config-name $CONFIG_FILE
 ```
 
-The flow model operates in the latent space created by the VQVAE encoder.
+The flow model operates in the latent space created by the autoencoder.
 
 ### Generating Samples -- TODO: this is not implemented yet! 
 
