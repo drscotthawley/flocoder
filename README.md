@@ -80,7 +80,7 @@ The project is organized as follows:
 
 ## Training
 
-The package includes several training scripts located in the `scripts/` directory:
+The package includes multiple training scripts located in main directory:
 
 ### Optional: Training a VQGAN
 You can use use the Stable Diffusion VAE to get started quickly. (It will auto-download).
