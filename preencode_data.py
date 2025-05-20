@@ -14,11 +14,8 @@ import concurrent.futures
 import threading
 import time
 import sys
-
 from torchvision import transforms, datasets
-
-from flocoder.data.datasets import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
-from flocoder.data.dataloaders import RandomRoll, create_image_loaders, midi_transforms, image_transforms
+from flocoder.data import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset, RandomRoll, create_image_loaders, midi_transforms, image_transforms
 
 
 def generate_random_string(length=6):

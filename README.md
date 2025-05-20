@@ -85,7 +85,7 @@ But if you want to train your own...
 ```bash
 export CONFIG_FILE=configs/flowers_config.yaml 
 #export CONFIG_FILE=configs/midi_config.yaml 
-python scripts/train_vqgan.py --config $CONFIG_FILE
+./train_vqgan.py --config $CONFIG_FILE
 ```
 
 The VQVAE compresses MIDI piano roll images into a quantized latent representation.
@@ -94,13 +94,13 @@ This will save checkpoints in the `checkpoints/` directory. Use that checkpoint 
 ### Pre-Encoding Data (with frozen augmentations)
 Takes about 15 minutes to run on a single GPU.
 ```bash
-python scripts/preencode_data.py --config $CONFIG_FILE
+./preencode_data.py --config $CONFIG_FILE
 ```
 
 ### Training the Flow Model
 
 ```bash
-python scripts/train_flow.py --config $CONFIG_FILE
+./train_flow.py --config $CONFIG_FILE
 ```
 
 The flow model operates in the latent space created by the VQVAE encoder.
@@ -109,7 +109,7 @@ The flow model operates in the latent space created by the VQVAE encoder.
 
 ```bash
 # Generate new MIDI samples
-python scripts/generate_samples.py --checkpoint models/flow_checkpoint.pt --output samples/
+./generate_samples.py --checkpoint models/flow_checkpoint.pt --output samples/
 ```
 
 This generates new samples by sampling from the flow model and decoding through the VQVAE.
@@ -125,7 +125,9 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 - [ ] Contributor Guidelines
 - [x] Style Guide
 - [ ] Standalone sampler script
+- [ ] In training/elsewhere: rename "vae"/"vqvae"/"vqgan" (lowercase only) variable as just "autoencoder"
 - [ ] Documentation
+- [ ] Move custom config/CLI arg system to Hydra or other package
 - [ ] Improve overall introduction/orientation
 
 

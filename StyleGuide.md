@@ -1,12 +1,27 @@
 # Coding Style Guide
 
+*"Do as I say, not as I do..."*
+
 This repo is intended to facilitate *teaching* and open-ended *experimentation*.  (It is not intended for optimal performance in deployment.) Thus the code should be easy to follow, easy to take in "at a glance", easy to trace the execution, and easy to see where to modify something to add new behavior, *without having to consult lengthy documentation on Class methods and/or scheduling, or diving through multiple levels of inheritance and/or imports*. 
 
 ## 1. Vertical compactness
 
-Wherever possible, code  should be designed  to take up as little vertical space as possible, to facilitate taking in the flow of execution "at a glance." 
+Wherever possible, code should be designed to take up as little vertical space as possible, to facilitate taking in the flow of execution "at a glance." 
 
-No lengthy docstrings, use inline "docments" (https://fastcore.fast.ai/docments.html) for args & kwargs. When calling functions, args & kwargs run sideways rather than vertically. 
+No lengthy docstrings, use inline "docments" (https://fastcore.fast.ai/docments.html) for args & kwargs. Example use of inline documents:  
+
+```python
+def mypow(x,            # here's a description of x
+          b:int,        # type hints are optional but welcome!
+          dummy=None):  # hey it's a kwarg
+	"""Raises x to the power of b"""
+	return x**b
+  
+```
+
+
+
+ When calling functions, args & kwargs run sideways rather than vertically. 
 
 Comments that only refer to a single line of code should go to the right rather than above it.
 

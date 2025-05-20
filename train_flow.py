@@ -24,10 +24,10 @@ from tqdm.auto import tqdm
 from PIL import Image
 from pathlib import Path
 
-from flocoder.models.unet import Unet, MRUnet
-#from flocoder.models.vqvae import VQVAE
-from flocoder.data.datasets import PreEncodedDataset, InfiniteDataset
-from flocoder.utils.general import save_checkpoint, keep_recent_files
+from flocoder.unet import Unet, MRUnet
+from flocoder.vqvae import VQVAE
+from flocoder.data import PreEncodedDataset, InfiniteDataset
+from flocoder.general import save_checkpoint, keep_recent_files
 
 import gc
 

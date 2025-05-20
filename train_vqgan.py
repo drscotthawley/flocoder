@@ -19,12 +19,11 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import wandb
 from tqdm.auto import tqdm
 
-from flocoder.data.dataloaders import create_image_loaders
-from flocoder.models.vqvae import VQVAE
-from flocoder.utils.viz import viz_codebook, viz_codebooks, denormalize
-from flocoder.training.vqgan_losses import *  
-from flocoder.eval.metrics import g2rgb, calculate_note_metrics, get_discriminator_stats, get_gradient_stats
-from flocoder.utils.general import save_checkpoint
+from flocoder.data import create_image_loaders
+from flocoder.vqvae import VQVAE
+from flocoder.viz import viz_codebook, viz_codebooks, denormalize
+from flocoder.metrics import *  # there's a lot
+from flocoder.general import save_checkpoint
 
 
 
