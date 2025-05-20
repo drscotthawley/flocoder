@@ -1,3 +1,5 @@
+
+
 <p align="center">
   <img src="images/logo.png" width="135px">
 </p>
@@ -6,7 +8,11 @@
 
 This is a (Work In Progress!) teaching and research package for exploring latent generative flow matching models. (The name is inspired by "vocoder.")
 
+
+
 This project initially started as a way to provide a lightweight, fast (and interpretable?) upgrade to the diffusion model system [Pictures of MIDI](https://huggingface.co/spaces/drscotthawley/PicturesOfMIDI) for MIDI piano roll images, but `flocoder` designed to work on more general datasets too. 
+
+*Warning: This may look like a polished repo but it's really just one man's cry for help^H^H^H^H invitation for others to collaborate.* 
 
 ## Quickstart
 
