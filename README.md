@@ -63,11 +63,7 @@ uv pip install natten --no-build-isolation
 
 The project is organized as follows:
 
-- `src/flocoder/`: Main package code
-  - `models/`: Neural network model definitions (VQVAE, UNet)
-  - `data/`: Data loading and processing utilities
-  - `training/`: Training logic and utilities
-  - `utils/`: General utilities and helper functions
+- `flocoder/`: Main package code
 - `scripts/`: Training and evaluation scripts
 - `configs/`: Configuration files for models and training
 - `notebooks/`: Jupyter notebooks for tutorials and examples
