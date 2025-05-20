@@ -23,9 +23,9 @@ import hydra
 from omegaconf import DictConfig
 
 from flocoder.unet import Unet, MRUnet
-from flocoder.vqvae import VQVAE
+from flocoder.codecs import load_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset
-from flocoder.general import save_checkpoint, keep_recent_files
+from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path
 
 import gc
 
@@ -156,7 +156,6 @@ def eval(model, codec, epoch, method, device, sample_N=None, batch_size=100, tag
         nfe=0
 
     decoded_images = codec.decode(images.to(device))
-    if codec.is_sd: decoded_images = decoded_images.sample
         
     save_img_grid(images.cpu(), epoch, method, nfe, tag=tag, use_wandb=use_wandb, output_dir=output_dir)
     save_img_grid(decoded_images.cpu(), epoch, method, nfe, tag=tag+"decoded_", use_wandb=use_wandb, output_dir=output_dir)
@@ -173,54 +172,6 @@ def warp_time(t, dt=None, s=.5):
         return tw,  dt * 12*(1-s)*t**2 + 12*(s-1)*t + (3-2*s)
     return tw
 
-
-def load_codec(cfg, device):
-    """Load the appropriate codec model based on configuration."""
-    if cfg.codec.choice == "sd":
-        try:
-            from diffusers.models import AutoencoderKL
-        except ImportError:
-            raise ImportError("To use SD VAE, you need to install diffusers. Try: pip install diffusers")
-
-        print(f"Loading SD VAE checkpoint from HuggingFace Diffusers")
-        codec = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
-        codec.is_sd = True
-        codec.scaling_factor = 1.0
-        if cfg.image_size % 8 != 0:
-            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {cfg.image_size}")
-    else:
-        from flocoder.vqvae import VQVAE
-        
-        # Convert config dictionary to an object with attributes for cleaner access
-        mpars = SimpleNamespace(**dict(cfg.model))  # model params
-        
-        # Create the model with clean attribute access
-        codec = VQVAE(
-            in_channels=3,
-            hidden_channels=mpars.hidden_channels,
-            num_downsamples=mpars.num_downsamples,
-            internal_dim=mpars.internal_dim,
-            vq_embedding_dim=mpars.vq_embedding_dim,
-            codebook_levels=mpars.codebook_levels,
-            vq_num_embeddings=mpars.vq_num_embeddings,
-            commitment_weight=getattr(mpars, 'commitment-weight', 0.5),
-            use_checkpoint=not cfg.get('no_grad_ckpt', False),
-            no_natten=False,
-        ).eval().to(device)
-        
-        checkpoint_path = cfg.vqgan_checkpoint
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Codec checkpoint file {checkpoint_path} not found.")
-        else:
-            print(f"Loading codec checkpoint from {checkpoint_path}")
-        
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
-        codec.load_state_dict(checkpoint['model_state_dict'])
-        codec.to(device)
-        print("Codec checkpoints loaded")
-
-    print("Codec model ready")
-    return codec
 
 
 def train_flow(cfg):
@@ -270,11 +221,10 @@ def train_flow(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device =", device)
 
-    # Load codec for evaluation
-    codec = load_codec(cfg, device)
+    codec = load_codec(cfg, device) # Load codec for inference/evaluation
 
     # Create flow model
-    model = MRUnet(
+    model = Unet(
         dim=H,
         channels=C,
         dim_mults=(1, 2, 4),
@@ -365,6 +315,7 @@ def train_flow(cfg):
             keep_recent_files(100, directory=output_dir, pattern="*.png") # not too many image outputs
 
 
+handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
 def main(cfg: DictConfig) -> None:
     print("Config keys:", list(cfg.keys()))     

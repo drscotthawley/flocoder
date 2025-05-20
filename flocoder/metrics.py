@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 from torch import nn
 from torch.utils.checkpoint import checkpoint
-from patch_discriminator import PatchDiscriminator
+from .patch_discriminator import PatchDiscriminator
 from torchmetrics.image.fid import FrechetInceptionDistance
 
 

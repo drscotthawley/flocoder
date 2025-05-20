@@ -1,7 +1,31 @@
-
 import os 
 import torch 
 from pathlib import Path
+
+
+def handle_config_path():
+    """Making up for Hydra weirdness: allow for --config-name to include full file path"""
+    import os, sys
+
+    for i, arg in enumerate(sys.argv):
+        path = None
+        if arg.startswith('--config-name='):  # Handle equals format
+            path = arg.split('=', 1)[1]
+        elif arg == '--config-name' and i+1 < len(sys.argv):  # Handle space format
+            path = sys.argv[i+1]
+
+        if path and '/' in path and path.endswith('.yaml') and os.path.exists(os.path.expanduser(path)):
+            full_path = os.path.expanduser(path)
+            config_dir, config_file = os.path.dirname(full_path), os.path.basename(full_path).replace('.yaml', '')
+
+            # Update args based on format used
+            if arg.startswith('--config-name='):
+                sys.argv[i] = f"--config-name={config_file}"
+                sys.argv.insert(i, f"--config-path={config_dir}")
+            else:
+                sys.argv[i+1] = config_file
+                sys.argv.insert(i+1, f"--config-path={config_dir}")
+            break
 
 
 def keep_recent_files(keep=5, directory='checkpoints', pattern='*.pt'):

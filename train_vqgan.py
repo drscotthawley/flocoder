@@ -1,4 +1,4 @@
-#! /usr/bin/env python3 
+#!/usr/bin/env python3 
 
 import matplotlib
 matplotlib.use('Agg')
@@ -18,13 +18,14 @@ from torchvision.utils import make_grid
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import wandb
 from tqdm.auto import tqdm
+import hydra
+from omegaconf import DictConfig
 
 from flocoder.data import create_image_loaders
-from flocoder.vqvae import VQVAE
-from flocoder.viz import viz_codebook, viz_codebooks, denormalize
+from flocoder.codecs import VQVAE, load_codec
+from flocoder.viz import viz_codebooks, denormalize
 from flocoder.metrics import *  # there's a lot
-from flocoder.general import save_checkpoint
-
+from flocoder.general import save_checkpoint, handle_config_path
 
 
 class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
@@ -108,63 +109,92 @@ def load_checkpoint_non_frozen(model, checkpoint):
     return model
 
 
-
-
-
-
-
-def train_vqgan(args):
+def train_vqgan(cfg):
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
-    # Data setup
-    is_midi = 'pop909' in args.data.lower() or 'midi' in args.data.lower()
-    train_loader, val_loader = create_image_loaders(batch_size=args.batch_size, image_size=args.image_size, 
-                                            data_path=args.data, num_workers=16, is_midi=is_midi)
+    # Data setup - access config values with appropriate defaults
+    is_midi = hasattr(cfg, 'data') and ('pop909' in cfg.data.lower() or 'midi' in cfg.data.lower())
+    batch_size = cfg.get('batch_size', 32)
+    image_size = cfg.get('image_size', 128)
+    data_path = cfg.get('data', None)
+    num_workers = cfg.get('num_workers', 16)
+    
+    train_loader, val_loader = create_image_loaders(
+        batch_size=batch_size, 
+        image_size=image_size, 
+        data_path=data_path, 
+        num_workers=num_workers, 
+        is_midi=is_midi
+    )
 
-    # Initialize models and losses
+    # Initialize model - either directly or using load_codec
     codec = VQVAE(
         in_channels=3,
-        hidden_channels=args.hidden_channels,
-        num_downsamples=args.num_downsamples,
-        vq_num_embeddings=args.vq_num_embeddings,
-        internal_dim=args.internal_dim,
-        codebook_levels=args.codebook_levels,
-        vq_embedding_dim=args.vq_embedding_dim,
-        commitment_weight=args.commitment_weight,
-        use_checkpoint=not args.no_grad_ckpt,
+        hidden_channels=cfg.get('hidden_channels', 256),
+        num_downsamples=cfg.get('num_downsamples', 3),
+        vq_num_embeddings=cfg.get('vq_num_embeddings', 512),
+        internal_dim=cfg.get('internal_dim', 256),
+        codebook_levels=cfg.get('codebook_levels', 4),
+        vq_embedding_dim=cfg.get('vq_embedding_dim', 4),
+        commitment_weight=cfg.get('commitment_weight', 0.25),
+        use_checkpoint=not cfg.get('no_grad_ckpt', False),
     ).to(device)
 
-    optimizer = optim.Adam(codec.parameters(), lr=args.learning_rate, weight_decay=1e-5)
-    scheduler = None # optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.learning_rate, total_steps=args.epochs)
+    optimizer = optim.Adam(codec.parameters(), lr=cfg.get('learning_rate', 1e-4), weight_decay=1e-5)
+    scheduler = None
 
     # vgg is used for perceptual loss part of adversarial training
     vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
     for param in vgg.parameters():
         param.requires_grad = False    
-    adv_loss = AdversarialLoss(device, use_checkpoint=not args.no_grad_ckpt).to(device)
+    adv_loss = AdversarialLoss(device, use_checkpoint=not cfg.get('no_grad_ckpt', False)).to(device)
     d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), 
-                            lr=args.learning_rate * 0.1, 
+                            lr=cfg.get('learning_rate', 1e-4) * 0.1, 
                             weight_decay=1e-5)
 
     # Resume from checkpoint if specified
     start_epoch = 0
-    if args.load_checkpoint is not None:
-        checkpoint = torch.load(args.load_checkpoint, map_location=device)
-        # codec.load_state_dict(checkpoint['codec_state_dict'])
-        codec = load_checkpoint_non_frozen(codec,checkpoint)
+    load_checkpoint = cfg.get('load_checkpoint', None)
+    if load_checkpoint is not None:
+        checkpoint = torch.load(load_checkpoint, map_location=device)
+        codec = load_checkpoint_non_frozen(codec, checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        #start_epoch = checkpoint['epoch'] + 1
         print(f"Resuming training from epoch {start_epoch}")
 
-
     # Initialize wandb
-    if not args.no_wandb:
-        wandb.init(project=args.project_name, name=args.run_name, config=vars(args))
+    no_wandb = cfg.get('no_wandb', False)
+    if not no_wandb:
+        project_name = cfg.wandb.get('project_name', "vqgan-training")
+        run_name = cfg.wandb.get('run_name', None)
+        wandb.init(project=project_name, name=run_name, config=dict(cfg))
+
+    # Training parameters
+    epochs = cfg.get('epochs', 1000000)
+    warmup_epochs = cfg.get('warmup_epochs', 15)
+    
+    # Lambda weight parameters with defaults
+    lambda_adv = cfg.get('lambda_adv', 0.03)
+    lambda_ce = cfg.get('lambda_ce', 2.0)
+    lambda_l1 = cfg.get('lambda_l1', 0.2)
+    lambda_mse = cfg.get('lambda_mse', 0.5)
+    lambda_perc = cfg.get('lambda_perc', 1e-5)
+    lambda_spec = cfg.get('lambda_spec', 2e-4)
+    lambda_vq = cfg.get('lambda_vq', 0.25)
+    
+    # Set lambda values on cfg for compute_vqgan_losses
+    cfg.lambda_adv = lambda_adv
+    cfg.lambda_ce = lambda_ce
+    cfg.lambda_l1 = lambda_l1
+    cfg.lambda_mse = lambda_mse
+    cfg.lambda_perc = lambda_perc
+    cfg.lambda_spec = lambda_spec 
+    cfg.lambda_vq = lambda_vq
+    cfg.warmup_epochs = warmup_epochs
 
     # Main training loop
-    for epoch in range(start_epoch, args.epochs):
-        if epoch == args.warmup_epochs:
+    for epoch in range(start_epoch, epochs):
+        if epoch == warmup_epochs:
             print("*** WARMUP PERIOD FINISHED. Engaging adversarial training. ***")
 
         codec.train()
@@ -172,21 +202,21 @@ def train_vqgan(args):
         total_batches = 0
         
         # Training phase
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch}/{args.epochs}')
+        pbar = tqdm(train_loader, desc=f'Epoch {epoch}/{epochs}')
         for batch_idx, batch in enumerate(pbar):
             # Get batch data
             source_imgs = batch[0].to(device)
             target_imgs = source_imgs
             
-            noise_strength = 0.0 if epoch < args.warmup_epochs else 0.2 * min(1.0, (epoch - args.warmup_epochs) / 10)
+            noise_strength = 0.0 if epoch < warmup_epochs else 0.2 * min(1.0, (epoch - warmup_epochs) / 10)
 
             # Pre-warmup training
-            if epoch < args.warmup_epochs:
+            if epoch < warmup_epochs:
                 recon, vq_loss = codec(source_imgs)
   
                 losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
-                                        adv_loss=None, epoch=epoch, config=args)
-                losses['total'] = get_total_vqgan_loss(losses, args)
+                                        adv_loss=None, epoch=epoch, config=cfg)
+                losses['total'] = get_total_vqgan_loss(losses, cfg)
                 
                 optimizer.zero_grad()
                 losses['total'].backward()
@@ -217,9 +247,9 @@ def train_vqgan(args):
                 if batch_idx % 1 == 0:
                     recon, vq_loss = codec(source_imgs, noise_strength=noise_strength)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
-                                            adv_loss=adv_loss, epoch=epoch, config=args)
+                                            adv_loss=adv_loss, epoch=epoch, config=cfg)
 
-                    losses['total'] = get_total_vqgan_loss(losses, args)
+                    losses['total'] = get_total_vqgan_loss(losses, cfg)
 
                     optimizer.zero_grad()
                     losses['total'].backward()
@@ -244,7 +274,7 @@ def train_vqgan(args):
             pbar.set_postfix({k: f'{v:.4g}' for k, v in batch_losses.items()})
 
             # Collect batch metrics for logging
-            if not args.no_wandb:
+            if not no_wandb:
                 log_dict = {  'epoch': epoch,  **{f'batch/{k}_loss': v for k, v in batch_losses.items()} }
                 wandb.log(log_dict)
 
@@ -266,8 +296,8 @@ def train_vqgan(args):
                     # Basic validation forward pass
                     recon, vq_loss, dist_stats = codec(source_imgs, get_stats=True)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg,
-                                            adv_loss=adv_loss, epoch=epoch, config=args)
-                    losses['total'] = get_total_vqgan_loss(losses, args)
+                                            adv_loss=adv_loss, epoch=epoch, config=cfg)
+                    losses['total'] = get_total_vqgan_loss(losses, cfg)
 
                     # Update validation losses
                     batch_losses = {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
@@ -276,7 +306,7 @@ def train_vqgan(args):
                         val_losses[k] += v
 
                     # Log validation visualizations for first batch
-                    if batch_idx == 0 and not args.no_wandb:
+                    if batch_idx == 0 and not no_wandb:
                         log_dict = {
                             'epoch': epoch,
                             'codebook/mean_distance': dist_stats['codebook_mean_dist'],
@@ -299,17 +329,17 @@ def train_vqgan(args):
                             orig, recon = g2rgb(orig), g2rgb(recon)
                             viz_images = torch.cat([orig, recon])
                             caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
-                            log_dict['demo/examples'] = wandb.Image( make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
+                            log_dict['demo/examples'] = wandb.Image(make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
                             wandb.log(log_dict)
 
         # Compute average validation losses
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:
-            viz_codebooks(codec, args, epoch)
+            viz_codebooks(codec, cfg, epoch)
 
         # Log epoch metrics
-        if not args.no_wandb:
+        if not no_wandb:
             log_dict = {
                 'epoch': epoch,
                 'learning_rate': optimizer.param_groups[0]['lr'],
@@ -324,135 +354,66 @@ def train_vqgan(args):
         if scheduler:
             scheduler.step()
 
+    return 'Training completed successfully.'
 
-    return 'Main finished.'
+
+# Process any direct config file paths
+handle_config_path()
+
+@hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
+def main(cfg):
+    """Main entry point using Hydra."""
+    # Debug output to understand the config structure
+    print("\nConfig structure:")
+    print(f"Type of cfg: {type(cfg)}")
+    print(f"Keys/attributes in cfg: {dir(cfg)}")
+
+    # Use the config directly without modifications
+    print("\nPassing config directly to train_vqgan")
+    train_vqgan(cfg)
+    return "Training complete"
 
 
-def parse_args_with_config():
-    """
-    This lets you specify args via a YAML config file and/or override those with command line args.
-    i.e. CLI args take precedence 
-    """
-    import argparse
-    import yaml 
-
-    # First pass to check for config file
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
-    args, _ = parser.parse_known_args()
+@hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
+def main_old(cfg):
+    """Main entry point using Hydra."""
+    # Set torch options for better performance
+    torch.cuda.empty_cache()
+    torch.backends.cudnn.benchmark = True
     
-    # Load config file if provided
-    config = {}
-    if args.config:
-        with open(args.config, 'r') as f:
-            yaml_config_full = yaml.safe_load(f)
-        
-        # grab only the "data" and the "vqgan" sections if the exists, and flatten the result 
-        if 'vqgan' in yaml_config_full:
-            yaml_config = yaml_config_full['vqgan']
-        if 'data' in yaml_config_full:
-            yaml_config["data"] = yaml_config_full['data'] 
-        # Flatten any further nested structure, and treat config variable names as CLI args
-        for section, params in yaml_config.items():
-            if isinstance(params, dict):
-                for key, value in params.items():
-                    config[key.replace('_', '-')] = value
-            else:
-                config[section.replace('_', '-')] = params
+    # Extract relevant config sections and handle various structure possibilities
+    vqgan_cfg = None
     
-    # Create full parser with config-based defaults
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    # Check for different possible config structures
+    if hasattr(cfg, 'vqgan'):
+        vqgan_cfg = cfg.vqgan
+    elif hasattr(cfg, '_target_'):
+        # Some Hydra configs use this structure
+        vqgan_cfg = cfg
+    else:
+        # Assume the config is directly usable
+        vqgan_cfg = cfg
     
-    # Add config option
-    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
+    # Handle the data path - check different possibilities
+    if hasattr(cfg, 'data'):
+        data_path = cfg.data
+        # Add data to vqgan_cfg if it's a dictionary-like object
+        if hasattr(vqgan_cfg, '__setattr__'):
+            vqgan_cfg.data = data_path
+        else:
+            # If it's a regular dict
+            vqgan_cfg = dict(vqgan_cfg)
+            vqgan_cfg['data'] = data_path
     
-    # Training parameters with config-based defaults
-    parser.add_argument('--batch-size', type=int, default=config.get('batch-size', 32), 
-                       help='the batch size')
-    parser.add_argument('--data', type=str, 
-                       default=config.get('data', None), 
-                       help='path to top-level-directory containing custom image data')
-    parser.add_argument('--epochs', type=int, 
-                       default=config.get('num-epochs', 1000000), 
-                       help='number of epochs')
-    parser.add_argument('--base-lr', type=float, 
-                       default=config.get('learning-rate', 1e-4), 
-                       help='base learning rate for batch size of 32')
-    parser.add_argument('--image-size', type=int, 
-                       default=config.get('image-size', 128), 
-                       help='will rescale images to squares of (image-size, image-size)')
-    parser.add_argument('--warmup-epochs', type=int, 
-                       default=config.get('warmup-epochs', 15), 
-                       help='number of epochs before enabling adversarial loss')
-    parser.add_argument('--lambda-adv', type=float, 
-                       default=config.get('lambda-adv', 0.03), 
-                       help="regularization param for G part of adversarial loss")
-    parser.add_argument('--lambda-ce', type=float, 
-                       default=config.get('lambda-ce', 2.0), 
-                       help="regularization param for cross-entropy loss")
-    parser.add_argument('--lambda-l1', type=float, 
-                       default=config.get('lambda-l1', 0.2), 
-                       help="regularization param for L1/Huber loss")
-    parser.add_argument('--lambda-mse', type=float, 
-                       default=config.get('lambda-mse', 0.5), 
-                       help="regularization param for MSE loss")
-    parser.add_argument('--lambda-perc', type=float, 
-                       default=config.get('lambda-perc', 1e-5), 
-                       help="regularization param for perceptual loss")
-    parser.add_argument('--lambda-spec', type=float, 
-                       default=config.get('lambda-spec', 2e-4), 
-                       help="regularization param for spectral loss")
-    parser.add_argument('--lambda-vq', type=float, 
-                       default=config.get('lambda-vq', 0.25), 
-                       help="reg factor mult'd by VQ commitment loss")
-    parser.add_argument('--no-wandb', action='store_true', help='disable wandb logging')
+    # Print the available keys to help debug
+    print(f"Available top-level config keys: {list(cfg.keys() if hasattr(cfg, 'keys') else dir(cfg))}")
+    if vqgan_cfg is not None and hasattr(vqgan_cfg, 'keys'):
+        print(f"VQGAN config keys: {list(vqgan_cfg.keys())}")
+    
+    # Pass the config to the training function
+    train_vqgan(vqgan_cfg)
+    return "Training complete"
 
-    # ae codec Model parameters
-    parser.add_argument('--load-checkpoint', type=str, 
-                       default=config.get('load-checkpoint', None), 
-                       help='path to load checkpoint to resume training from')
-    parser.add_argument('--hidden-channels', type=int, 
-                       default=config.get('hidden-channels', 256))
-    parser.add_argument('--num-downsamples', type=int, 
-                       default=config.get('num-downsamples', 3), 
-                       help='total downsampling is 2**[this]')
-    parser.add_argument('--vq-num-embeddings', type=int, 
-                       default=config.get('vq-num-embeddings', 32), 
-                       help='aka codebook length')
-    parser.add_argument('--internal-dim', type=int, 
-                       default=config.get('internal-dim', 256), 
-                       help='internal pre-vq emb dim before compression')
-    parser.add_argument('--vq-embedding-dim', type=int, 
-                       default=config.get('vq-embedding-dim', 4), 
-                       help='(actual) dims of codebook vectors')
-    parser.add_argument('--codebook-levels', type=int, 
-                       default=config.get('codebook-levels', 4), 
-                       help='number of RVQ levels')
-    parser.add_argument('--commitment-weight', type=float, 
-                       default=config.get('commitment-weight', 0.5), 
-                       help='VQ commitment weight, aka quantization strength')
-    parser.add_argument('--project-name', type=str, 
-                       default=config.get('project-name', "vqgan-midi"), 
-                       help='WandB project name')
-    parser.add_argument('--run-name', type=str, 
-                       default=config.get('run-name', None), 
-                       help='WandB run name')
-    parser.add_argument('--no-grad-ckpt', action='store_true', 
-                       help='disable gradient checkpointing')
-    
-    # Parse args
-    args = parser.parse_args()
-    
-    # Calculate learning rate based on batch size
-    args.learning_rate = args.base_lr * math.sqrt(args.batch_size / 32)
-    args.data = os.path.expanduser(args.data)
-    
-    return args
+if __name__ == "__main__":
+    main()
 
-
-
-
-if __name__ == '__main__':
-    args = parse_args_with_config()
-    print("args = ",args)
-    train_vqgan(args)

@@ -494,3 +494,139 @@ class VQVAE(nn.Module):
             return x_recon, commit_loss.mean(), stats
         else:
             return x_recon, commit_loss.mean()
+
+
+
+class SimpleResizeAE(nn.Module):
+    """Just resizes tensors using bilinear interpolation. 
+    For testing/exploration - reconstructions will be blocky/blurry."""
+    def __init__(self, latent_size=None, # Int or tuple for latent dimensions
+                 in_channels=3,          # Number of input channels (RGB default)
+                 out_channels=None,      # Defaults to in_channels if None
+                 orig_size=None):        # Size to decode back to if known 
+        super().__init__()
+        self.latent_size = latent_size
+        self.in_channels = in_channels
+        self.out_channels = out_channels if out_channels is not None else in_channels
+        self.orig_size = orig_size
+        
+    def encode(self, x):
+        """Resize input to latent_size using bilinear interpolation."""
+        if self.latent_size is None: return x
+        h, w = (self.latent_size, self.latent_size) if isinstance(self.latent_size, int) else self.latent_size
+        return F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
+    
+    def decode(self, z, orig_size=None, noise_strength=0.0): # noise_strength unused, for API compatibility
+        """Resize latent back to original dimensions."""
+        target_size = orig_size if orig_size is not None else self.orig_size
+        if target_size is None: return z  # Can't resize without target size
+        h, w = (target_size, target_size) if isinstance(target_size, int) else target_size
+        return F.interpolate(z, size=(h, w), mode='bilinear', align_corners=False)
+    
+    def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
+        """Encode and decode in one step, auto-storing original size."""
+        self.orig_size = (x.shape[2], x.shape[3])
+        z = self.encode(x)
+        recon = self.decode(z)
+        if get_stats: return recon, 0.0, {'codebook_mean_dist': 0.0, 'codebook_max_dist': 0.0}
+        return recon, 0.0
+
+
+
+
+class SDVAEWrapper(nn.Module):
+    """Wrapper for Stable Diffusion VAE to make it compatible with our standard interface."""
+    def __init__(self, pretrained_model_name="stabilityai/sd-vae-ft-mse"):
+        super().__init__()
+        from diffusers.models import AutoencoderKL  # lazy import, only use if needed
+        self.vae = AutoencoderKL.from_pretrained(pretrained_model_name).eval()
+
+    def encode(self, x):
+        """Encode images to latent space."""
+        # Dynamically scale to [-1,1] range regardless of input range
+        x_min, x_max = x.min(), x.max()
+        self.last_min, self.last_max = x_min, x_max  # Store for decode scaling
+        if x_min != -1 or x_max != 1:
+            x = 2 * (x - x_min) / (x_max - x_min + 1e-8) - 1
+        return self.vae.encode(x).latent_dist.sample()
+
+    def decode(self, z, orig_size=None, noise_strength=0.0):
+        """Decode latents to images, automatically handling the .sample() call."""
+        decoded = self.vae.decode(z).sample
+        if hasattr(self, 'last_min') and hasattr(self, 'last_max'):
+            return 0.5 * (decoded + 1) * (self.last_max - self.last_min) + self.last_min
+        return decoded
+
+    def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
+        """Forward pass through encoder and decoder."""
+        self.last_min, self.last_max = x.min(), x.max()  # Store for decode scaling
+        z = self.encode(x)
+        recon = self.decode(z)
+        if get_stats: return recon, 0.0, {'codebook_mean_dist': 0.0, 'codebook_max_dist': 0.0}
+        return recon, 0.0
+
+
+
+
+def load_codec(cfg, device):
+    """Load the appropriate codec model based on configuration."""
+    import os
+    import torch
+    from types import SimpleNamespace
+
+    if cfg.codec.choice == "resize":
+        print("Using SimpleResizeAE")
+        codec = SimpleResizeAE(
+            latent_size=(cfg.get('latent_h', 16), cfg.get('latent_w', 16)),
+            in_channels=3,
+        ).eval().to(device)
+
+    elif cfg.codec.choice == "sd":
+        print("Loading SD VAE via SDWrapperAE")
+        codec = SDWrapperAE(
+            pretrained_model_name="stabilityai/sd-vae-ft-mse"
+        ).eval().to(device)
+
+        if hasattr(cfg, 'image_size') and cfg.image_size % 8 != 0:
+            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {cfg.image_size}")
+    else:
+        # Original VQVAE path
+        # Get model parameters, handle nested config structures
+        if hasattr(cfg, 'model'):
+            mpars = SimpleNamespace(**dict(cfg.model))
+        elif hasattr(cfg, 'codec') and hasattr(cfg.codec, 'model'):
+            mpars = SimpleNamespace(**dict(cfg.codec.model))
+        else:
+            mpars = SimpleNamespace(**dict(cfg))
+
+        # Create the VQVAE model
+        codec = VQVAE(
+            in_channels=3,
+            hidden_channels=getattr(mpars, 'hidden_channels', 256),
+            num_downsamples=getattr(mpars, 'num_downsamples', 3),
+            internal_dim=getattr(mpars, 'internal_dim', 256),
+            vq_embedding_dim=getattr(mpars, 'vq_embedding_dim', 4),
+            codebook_levels=getattr(mpars, 'codebook_levels', 4),
+            vq_num_embeddings=getattr(mpars, 'vq_num_embeddings', 512),
+            commitment_weight=getattr(mpars, 'commitment_weight', 0.5),
+            use_checkpoint=not cfg.get('no_grad_ckpt', False),
+            no_natten=False,
+        ).eval().to(device)
+
+        # Figure out checkpoint path from different possible config structures
+        if hasattr(cfg, 'vqgan_checkpoint'):
+            checkpoint_path = cfg.vqgan_checkpoint
+        elif hasattr(cfg, 'codec') and hasattr(cfg.codec, 'checkpoint'):
+            checkpoint_path = cfg.codec.checkpoint
+        else:
+            raise ValueError("Could not find codec checkpoint path in config")
+
+        if checkpoint_path.lower() != "sd" and not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Codec checkpoint file {checkpoint_path} not found.")
+
+        print(f"Loading codec checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        codec.load_state_dict(checkpoint['model_state_dict'])
+
+    print("Codec model ready")
+    return codec

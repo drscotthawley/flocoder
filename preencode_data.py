@@ -19,6 +19,8 @@ import hydra
 from omegaconf import DictConfig
 from types import SimpleNamespace
 
+from flocoder.general import handle_config_path
+from flocoder.codecs import load_codec
 from flocoder.data import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
 from flocoder.data import create_image_loaders, midi_transforms, image_transforms
 
@@ -28,17 +30,11 @@ def generate_random_string(length=6):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
-def encode_batch(codec, batch, device, is_sd):
+def encode_batch(codec, batch, device):
     """Encode a batch of image tensors using codec with proper scaling."""
     with torch.no_grad():
         batch = batch.to(device, non_blocking=True)
-        if not is_sd:
-            return codec.encode(batch)
-        if batch.min() >= 0 and batch.max() <= 1:  # SD VAE expects images in [-1, 1]
-            batch = 2 * batch - 1  # If images are [0, 1], convert to [-1, 1]  
-        latents = codec.encode(batch).latent_dist.mean
-        return latents * codec.scaling_factor  # SD uses this scaling factor to make latents closer to N(0,1)
-
+        return codec.encode(batch)
 
 def setup_dataset(data_path, image_size):
     """Set up and return the appropriate dataset based on the data path."""
@@ -111,11 +107,9 @@ def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, n
                     print(f"\nStorage limit reached: {current_storage/1024**3:.2f} GB")
                     break
                 
-                # Process batch
-                encoded_batch = encode_batch(codec, images, device, codec.is_sd)
+                encoded_batch = encode_batch(codec, images, device) # Process batch
                 
-                # Submit file saving tasks to thread pool
-                future_to_filename = {}
+                future_to_filename = {} # Submit file saving tasks to thread pool
                 
                 # Process each sample in the batch
                 for i in range(encoded_batch.shape[0]):
@@ -174,55 +168,7 @@ def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, n
                     torch.cuda.empty_cache()
 
 
-def load_codec(cfg, device):
-    """Load the appropriate codec model based on configuration."""
-    if cfg.codec.choice == "sd":
-        try:
-            from diffusers.models import AutoencoderKL
-        except ImportError:
-            raise ImportError("To use SD VAE, you need to install diffusers. Try: pip install diffusers")
-
-        print(f"Loading SD VAE checkpoint from HuggingFace Diffusers")
-        codec = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
-        codec.is_sd = True
-        codec.scaling_factor = 1.0  # Use 1.0 as the scaling factor to avoid mangling
-        if cfg.image_size % 8 != 0:
-            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {cfg.image_size}")
-    else:
-        # Import only when needed
-        from flocoder.vqvae import VQVAE
-        
-        # Convert config dictionary to an object with attributes for cleaner access
-        mpars = SimpleNamespace(**dict(cfg.codec.model))  # model params
-        no_grad_ckpt = cfg.get('no_grad_ckpt', False)
-        
-        # Create the model with clean attribute access
-        codec = VQVAE(
-            in_channels=3,
-            hidden_channels=mpars.hidden_channels,
-            num_downsamples=mpars.num_downsamples,
-            internal_dim=mpars.internal_dim,
-            vq_embedding_dim=mpars.vq_embedding_dim,
-            codebook_levels=mpars.codebook_levels,
-            vq_num_embeddings=mpars.vq_num_embeddings,
-            commitment_weight=mpars.commitment_weight,
-            use_checkpoint=not no_grad_ckpt,
-            no_natten=False,
-        ).eval().to(device)
-        
-        checkpoint_path = cfg.get('codec_checkpoint', None)
-        if checkpoint_path:
-            print(f"Loading codec/vae checkpoint from {checkpoint_path}")
-            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
-            codec.load_state_dict(checkpoint['model_state_dict'])
-        
-        codec.is_sd = False
-        codec.scaling_factor = 1.0
-
-    print("Codec checkpoint loaded successfully")
-    return codec
-
-
+handle_config_path()  # allow for full path in --config-name
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
 def main(cfg) -> None:
     """Main entry point using Hydra."""
@@ -241,14 +187,13 @@ def main(cfg) -> None:
     
     # Get configuration values with defaults
     data_path = cfg.data
-    output_dir = f"{data_path}_encoded" if not cfg.get('output_dir') else cfg.output_dir
+    output_dir = f"{data_path}_encoded_{cfg.codec.choice}" if not cfg.get('output_dir') else cfg.output_dir
     image_size = cfg.get('image_size', 128)
     max_storage_gb = cfg.get('max_storage_gb', 50)
     batch_size = cfg.get('batch_size', 32)
     augs_per = cfg.get('augs_per', 512)
     num_workers = cfg.get('num_workers', min(int(os.cpu_count() * 0.75), 64))
     
-    # Load model
     codec = load_codec(cfg, device)
     
     # Setup dataset and output directory
