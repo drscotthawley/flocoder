@@ -44,7 +44,7 @@ source .venv/bin/activate
 # On Windows:
 # .venv\Scripts\activate
 
-# Install the package in editable mode (See below re. NATTEN errors)
+# Install the package in editable mode (See below if you get NATTEN errors!)
 uv pip install -e .
 
 # Recommended: Install development dependencies (jupyter, others...)
