@@ -11,18 +11,16 @@ import numpy as np
 import torch
 import torch.optim as optim
 import torchvision
-#from scipy import integrate # this is CPU only ewww
 from torch.utils.data import DataLoader
-#from torch.utils.tensorboard import SummaryWriter  # SHH: I prefer wandb to tb
 import wandb
 from torchvision import datasets, transforms
-
-from scipy import integrate # this is CPU-only ewww
-
+from scipy import integrate  # This is CPU-only
 from tqdm.auto import tqdm
-#from dist_metrics import compare_distributions, make_histograms
 from PIL import Image
 from pathlib import Path
+from types import SimpleNamespace
+import hydra
+from omegaconf import DictConfig
 
 from flocoder.unet import Unet, MRUnet
 from flocoder.vqvae import VQVAE
@@ -30,19 +28,6 @@ from flocoder.data import PreEncodedDataset, InfiniteDataset
 from flocoder.general import save_checkpoint, keep_recent_files
 
 import gc
-
-
-# image_size = (16,16) # (64, 64) 
-# channels = 4
-# C, H, W = channels, image_size[0], image_size[1]
-# batch_size=12288//3
-# print("batch_size = ",batch_size)
-# B = batch_size
-# learning_rate = 1e-3
-# epochs = 999999 # 1000  or just let it go til the disk fills with checkpoints TODO: keep only last few checkpoints
-# eps = 0.001 # used in integration
-# condition = False  # Enaable class-conditioning
-# n_classes = None # updates in main()
 
 
 class EMA:
@@ -86,27 +71,6 @@ class EMA:
                 self.backup[name] = None
 
 
-# def euler_sampler(model, shape, sample_N, device, eps=0.001, n_classes=0):
-#     """quick and dirty integration using Euler method; not very accurate"""
-#     model.eval()
-#     # Create a grid where each column is a single class (10 columns)
-#     cond = None
-#     if n_classes > 0:
-#         cond = torch.arange(min(10, n_classes), device=device).repeat_interleave(shape[0]//10)[:shape[0]]
-#         cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device)
-#     with torch.no_grad():
-#         z0 = torch.randn(shape, device=device)
-#         x = z0.detach().clone()
-#         dt = 1.0 / sample_N
-#         for i in range(sample_N):
-#             num_t = i / sample_N * (1 - eps) + eps
-#             t = torch.ones(shape[0], device=device) * num_t
-#             pred = model(x, t * 999, cond)
-#             x = x.detach().clone() + pred * dt
-#         nfe = sample_N
-#         return x.cpu(), nfe
-
-
 def to_flattened_numpy(x):
     return x.detach().cpu().numpy().reshape((-1,))
 
@@ -122,7 +86,6 @@ def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=3.0):
     # Create a grid where each column is a single class (10 columns)
     cond = None # the conditioning signal to the model
     if n_classes > 0:
-        #cond = torch.arange(min(10, n_classes), device=device).repeat_interleave(shape[0]//10)[:shape[0]]
         cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device)
     
     with torch.no_grad():
@@ -152,24 +115,13 @@ def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=3.0):
         return x, nfe
 
 
-def imshow_old(img, filename):
-    #metrics = compare_distributions(img, target_img)  # TODO: create target_img
-    img = img * 0.5 + 0.5
-    img = np.clip(img, 0, 1)
-    npimg = img.permute(1, 2, 0).numpy()
-    plt.imshow(npimg)
-    plt.axis("off")
-    plt.savefig(filename, bbox_inches="tight", pad_inches=0)
-
 def imshow(img, filename):
-    #img = img * 0.5 + 0.5
     imin, imax = img.min(), img.max()
     img = (img - imin) / (imax - imin) # rescale via max/min
     img = np.clip(img, 0, 1)
     npimg = (img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
     pil_img = Image.fromarray(npimg)
     pil_img.save(filename)
-
 
 
 def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="output"):
@@ -185,15 +137,15 @@ def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="o
 
 
 @torch.no_grad()
-def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="", 
+def eval(model, codec, epoch, method, device, sample_N=None, batch_size=100, tag="", 
          images=None, use_wandb=True, output_dir="output", n_classes=0):
     """Evaluate model by generating samples with class conditioning"""
     model.eval()
     # Use a batch size that's a multiple of 10 to ensure proper grid layout
     # For a 10x10 grid, use batch_size = 100
     batch_size=100 # hard code this for the image display; ignore other batch size values
-    shape = (batch_size, 4, 16, 16) # TODO: this needs tobe inferred
-    shape = (batch_size, 4, 4, 4) # TODO: this needs tobe inferred
+    shape = (batch_size, 4, 16, 16) # TODO: this needs to be inferred
+    shape = (batch_size, 4, 4, 4) # TODO: this needs to be inferred
 
     if images is None:
         if method == "euler":
@@ -203,15 +155,12 @@ def eval(model, vae, epoch, method, device, sample_N=None, batch_size=100, tag="
     else:
         nfe=0
 
-    decoded_images = vae.decode(images.to(device))
-    if vae.is_sd: decoded_images = decoded_images.sample
+    decoded_images = codec.decode(images.to(device))
+    if codec.is_sd: decoded_images = decoded_images.sample
         
     save_img_grid(images.cpu(), epoch, method, nfe, tag=tag, use_wandb=use_wandb, output_dir=output_dir)
     save_img_grid(decoded_images.cpu(), epoch, method, nfe, tag=tag+"decoded_", use_wandb=use_wandb, output_dir=output_dir)
     return model.train()
-
-
-
 
 
 def warp_time(t, dt=None, s=.5):
@@ -225,29 +174,89 @@ def warp_time(t, dt=None, s=.5):
     return tw
 
 
-def train_flow(args):
+def load_codec(cfg, device):
+    """Load the appropriate codec model based on configuration."""
+    if cfg.codec.choice == "sd":
+        try:
+            from diffusers.models import AutoencoderKL
+        except ImportError:
+            raise ImportError("To use SD VAE, you need to install diffusers. Try: pip install diffusers")
 
-    print(f"data_path = {args.data}")
+        print(f"Loading SD VAE checkpoint from HuggingFace Diffusers")
+        codec = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
+        codec.is_sd = True
+        codec.scaling_factor = 1.0
+        if cfg.image_size % 8 != 0:
+            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {cfg.image_size}")
+    else:
+        from flocoder.vqvae import VQVAE
+        
+        # Convert config dictionary to an object with attributes for cleaner access
+        mpars = SimpleNamespace(**dict(cfg.model))  # model params
+        
+        # Create the model with clean attribute access
+        codec = VQVAE(
+            in_channels=3,
+            hidden_channels=mpars.hidden_channels,
+            num_downsamples=mpars.num_downsamples,
+            internal_dim=mpars.internal_dim,
+            vq_embedding_dim=mpars.vq_embedding_dim,
+            codebook_levels=mpars.codebook_levels,
+            vq_num_embeddings=mpars.vq_num_embeddings,
+            commitment_weight=getattr(mpars, 'commitment-weight', 0.5),
+            use_checkpoint=not cfg.get('no_grad_ckpt', False),
+            no_natten=False,
+        ).eval().to(device)
+        
+        checkpoint_path = cfg.vqgan_checkpoint
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Codec checkpoint file {checkpoint_path} not found.")
+        else:
+            print(f"Loading codec checkpoint from {checkpoint_path}")
+        
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        codec.load_state_dict(checkpoint['model_state_dict'])
+        codec.to(device)
+        print("Codec checkpoints loaded")
 
-    dataset = PreEncodedDataset(args.data) 
-    n_classes = args.n_classes
+    print("Codec model ready")
+    return codec
+
+
+def train_flow(cfg):
+    # Extract parameters from config
+    data_path = cfg.data+"_encoded"
+    batch_size = cfg.training.batch_size
+    n_classes = cfg.model.n_classes
+    condition = cfg.model.condition
+    lambda_lowres = cfg.training.get('lambda_lowres', 0.1)
+    learning_rate = cfg.training.learning_rate
+    epochs = cfg.training.num_epochs
+    project_name = cfg.wandb.project_name
+    run_name = cfg.wandb.get('run_name', None)
+    no_wandb = cfg.get('no_wandb', False)
+    
+    print(f"data_path = {data_path}")
+
+    dataset = PreEncodedDataset(data_path) 
+    
     # If n_classes is not specifically set but the dataset has this info, use it
     if n_classes <= 0 and hasattr(dataset, 'n_classes'):
         n_classes = dataset.n_classes
         print(f"Using dataset-provided n_classes: {n_classes}")
+    
     # If we're using conditioning but don't have class info, warn and disable
-    if args.condition and (n_classes is None or n_classes <= 0):
+    if condition and (n_classes is None or n_classes <= 0):
         print("Warning: Conditioning requested but no class information available. Disabling conditioning.")
-        args.condition = False
+        condition = False
         n_classes = 0
-    condition = args.condition
 
     print(f"Configuring model for {n_classes} classes, conditioning = {condition}\n")
     C, H, W = 4, 16, 16 # TODO: read this from data!!
 
     train_dataloader = DataLoader(
         dataset=dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         shuffle=True,
         num_workers=12,
         pin_memory=True,
@@ -255,84 +264,42 @@ def train_flow(args):
     )
     dataloader = train_dataloader # alias to avoid errors later
 
-    
-    output_dir = f"output_midi-sd-{H}x{W}" # TODO: fix this so it reads from data!!
+    output_dir = f"output_{data_path.split('/')[-1]}-{H}x{W}" 
     os.makedirs(output_dir, exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("device=",device)
+    print("device =", device)
 
-    print("creating (VQ)VAE model...")
+    # Load codec for evaluation
+    codec = load_codec(cfg, device)
 
-    # Initialize (VQ)VAE - we'll only use the decoder for viz & eval, since our data is pre-encoded
-    if 'SD' in args.vqgan_checkpoint or 'stable-diffusion' in args.vqgan_checkpoint:
-        try:
-            from diffusers.models import AutoencoderKL
-        except ImportError:
-            raise ImportError("To use SD VAE, you need to install diffusers. Try: pip install diffusers")
-
-        print(f"Loading (VQ)VAE checkpoint from HuggingFace Diffusers")
-        vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").eval().to(device)
-        vae.is_sd = True
-        vae.scaling_factor = 1.0 # this is wrong -> 0.18215  # SD's standard scaling factor
-        if args.image_size % 8 != 0:
-            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {args.image_size}")
-    else:
-        from flocoder.models.vqvae import VQVAE
-        vae = VQVAE(
-            in_channels=3,
-            hidden_channels=args.hidden_channels,
-            num_downsamples=args.num_downsamples,
-            vq_num_embeddings=args.vq_num_embeddings,
-            internal_dim=args.internal_dim,
-            vq_embedding_dim=args.vq_embedding_dim,
-            codebook_levels=args.codebook_levels,
-            use_checkpoint=not args.no_grad_ckpt,# this refers to gradient checkpointing
-            no_natten=False,
-        ).eval().to(device)
-
-        # TODO: consistent use of either VQVAE or VQGAN
-        vqgan_ckpt_file =args.vqgan_checkpoint #  "midi_vqvae_latest.pt"
-        if not os.path.exists(vqgan_ckpt_file):
-            raise FileNotFoundError(f"VQVAE checkpoint file {vqgan_ckpt_file} not found.")
-        else:
-            print(f"Loading VQVAE checkpoint from {vqgan_ckpt_file}")
-        checkpoint = torch.load(vqgan_ckpt_file, map_location=device, weights_only=True)
-        vae.load_state_dict(checkpoint['model_state_dict'])
-        vae.to(device)
-        #vae.device = device
-        print("(vq)vae checkpoints loaded")
-
-    print("(vq)vae model ready")
-
+    # Create flow model
     model = MRUnet(
         dim=H,
         channels=C,
         dim_mults=(1, 2, 4),
-        condition=args.condition,
-        n_classes=args.n_classes,
-        #use_checkpoint=True,
+        condition=condition,
+        n_classes=n_classes,
     )
     model.to(device)
     print(f"Model conditioning enabled: {hasattr(model, 'condition') and model.condition}")
     print(f"Model has cond_mlp: {hasattr(model, 'cond_mlp')}")
-    #model_cp_file = "model_epoch_2300.pt"
-    #checkpoint = torch.load(model_cp_file, map_location=device, weights_only=True)
-    #model.load_state_dict(checkpoint)
-    #print("model checkpoint loaded")
 
     loss_fn = torch.nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-    use_wandb = not args.no_wandb
-    if use_wandb: wandb.init(project=args.project_name, name=args.run_name, config=vars(args))
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    use_wandb = not no_wandb
+    
+    if use_wandb: 
+        wandb.init(project=project_name, name=run_name, config=dict(cfg))
 
     ema = EMA(model, decay=0.999, device=device)
 
     rolling_avg_loss, alpha = None, 0.99 
     eps = 0.001 # used in integration
-    for epoch in range(args.epochs):
+    
+    for epoch in range(epochs):
         model.train()
-        pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{args.epochs}:')
+        pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{epochs}:')
         for batch, cond in pbar:
             batch, cond = batch.to(device), cond.to(device)
             if random.random() < 0.1: cond = None # for classifier-free guidance: turn off cond signal sometimes
@@ -344,7 +311,7 @@ def train_flow(args):
             t = torch.rand(batch.shape[0], device=device) * (1 - eps) + eps
             t = warp_time(t)          
 
-            t_expand = t.view(-1, 1, 1, 1).repeat(  1, batch.shape[1], batch.shape[2], batch.shape[3] )
+            t_expand = t.view(-1, 1, 1, 1).repeat(1, batch.shape[1], batch.shape[2], batch.shape[3])
             perturbed_data = t_expand * batch + (1 - t_expand) * source
 
             v_guess = target - source  #batch - z0
@@ -352,7 +319,7 @@ def train_flow(args):
             loss = loss_fn(v_model, v_guess)
             lowres_v_guess = model.shrinker(v_guess)
             lowres_loss = loss_fn(model.bottleneck_target_hook, lowres_v_guess) # compare with hook
-            loss = loss + args.lambda_lowres* lowres_loss
+            loss = loss + lambda_lowres * lowres_loss
 
             loss.backward()
 
@@ -363,167 +330,46 @@ def train_flow(args):
                 rolling_avg_loss = alpha * rolling_avg_loss + (1 - alpha) * loss.item()
                 if loss.item() > 3 * rolling_avg_loss:  # Loss spike detected
                     optimizer.param_groups[0]['lr'] *= 0.5  # Halve the learning rate
+            
             if use_wandb:
                 wandb.log({
                     "Loss/train": loss.item(),
                     "Learning Rate": optimizer.param_groups[0]['lr'],
-                    "epoch": epoch })
+                    "epoch": epoch 
+                })
+            
             pbar.set_postfix({"Loss/train":f"{loss.item():.4g}"})
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)  # gradient clipping for stability
 
             optimizer.step()
             ema.update()
 
-
-        if (epoch < 10 and epoch %1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): # evals every 2 at beginning, then every 20 later
+        if (epoch < 10 and epoch % 1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): 
+            # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
             images = batch[:100].cpu()
             batch, score, target = None, None, None
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval(model, vae, epoch, "target_data", device, tag="", images=images, use_wandb=use_wandb, output_dir=output_dir, n_classes=args.n_classes)
-            eval(model, vae, epoch, "rk45", device, tag="", use_wandb=use_wandb, output_dir=output_dir, n_classes=args.n_classes)
+            eval(model, codec, epoch, "target_data", device, tag="", images=images, use_wandb=use_wandb, output_dir=output_dir, n_classes=n_classes)
+            eval(model, codec, epoch, "rk45", device, tag="", use_wandb=use_wandb, output_dir=output_dir, n_classes=n_classes)
             ema.eval()
-            eval(model, vae, epoch, "rk45", device, tag="ema_", use_wandb=use_wandb, output_dir=output_dir, n_classes=args.n_classes)
+            eval(model, codec, epoch, "rk45", device, tag="ema_", use_wandb=use_wandb, output_dir=output_dir, n_classes=n_classes)
             ema.train()
 
-        if (epoch + 1) % 25 == 0: # checkpoint every 100
+        if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
             save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flow_", ckpt_dir=f"checkpoints")
-            
-            #torch.save( model.state_dict(), os.path.join(directory, f"model_epoch_{epoch + 1}.pt"),)
-            # Save EMA weights
             ema.eval()  # Switch to EMA weights
-            #torch.save( model.state_dict(),  # Now contains EMA weights
-            #    os.path.join(directory, f"model_ema_epoch_{epoch + 1}.pt"))
             save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flowema_", ckpt_dir=f"checkpoints")
-
             ema.train()  # Switch back to regular weights
-            #keep_recent_files(10, directory=directory, pattern="*.pt") # occasionally clean up the disk
             keep_recent_files(100, directory=output_dir, pattern="*.png") # not too many image outputs
 
 
-
-def parse_args_with_config():
-    """
-    This lets you specify args via a YAML config file and/or override those with command line args.
-    i.e. CLI args take precedence 
-    """
-    import argparse
-    import yaml 
-
-    # First pass to check for config file
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
-    args, _ = parser.parse_known_args()
-
-    
-    # Load config file if provided
-    if args.config:
-        with open(args.config, 'r') as f:
-            yaml_config_full = yaml.safe_load(f)
-        
-        config = {}  # Initialize config
-        
-        # Add global data if it exists
-        if 'data' in yaml_config_full:
-            config["data"] = yaml_config_full['data']
-        
-        # Process sections
-        sections_to_process = ['vqgan', 'preencoding', 'flow'] # note later items overwrite earlier ones
-        for section in sections_to_process:
-            if section in yaml_config_full:
-                section_params = yaml_config_full[section]
-                
-                # Flatten the nested structure
-                for key, value in section_params.items():
-                    if isinstance(value, dict):
-                        # This is where the flattening happens for nested dicts
-                        for subkey, subvalue in value.items():
-                            config[subkey.replace('_', '-')] = subvalue
-                    else:
-                        config[key.replace('_', '-')] = value
-        
-        print("Flattened config from file:", config)
-    
-    # Create full parser with config-based defaults
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    
-    # Add config option
-    parser.add_argument('--config', type=str, default=None, help='path to config YAML file')
-    
-    # Training parameters with config-based defaults
-    parser.add_argument('--batch-size', type=int, default=config.get('batch-size', 32), 
-                       help='the batch size')
-    parser.add_argument('--data', type=str, 
-                       default=config.get('data', None)+"_encoded", 
-                       help='path to top-level-directory containing custom image data')
-    parser.add_argument('--epochs', type=int, 
-                       default=config.get('num-epochs', 1000000), 
-                       help='number of epochs')
-    parser.add_argument('--base-lr', type=float, 
-                       default=config.get('learning-rate', 1e-4), 
-                       help='base learning rate for batch size of 32')
-    parser.add_argument('--image-size', type=int, 
-                       default=config.get('image-size', 128), 
-                       help='will rescale images to squares of (image-size, image-size)')
-    parser.add_argument('--load-checkpoint', type=str, 
-                       default=config.get('load-checkpoint', None), 
-                       help='path to load checkpoint to resume training from')
-    parser.add_argument('--n-classes', type=int, 
-                       default=config.get('n-classes', 0), 
-                       help='number of classes (for class-conditioned training)')
-    parser.add_argument('--condition', type=lambda x: str(x).lower() == 'true', 
-                   default=config.get('condition', False),
-                   help='whether to include conditioning (true/false)')
-   
-    # vq parameters
-    parser.add_argument('--vqgan-checkpoint', type=str, 
-                       default=config.get('vqgan-checkpoint', None), 
-                       help='path to load vqvgan checkpoint to resume training from')
-    # TODO: vqgan model params should be included in checkpoint file. 
-    parser.add_argument('--hidden-channels', type=int, 
-                       default=config.get('hidden-channels', 256))
-    parser.add_argument('--num-downsamples', type=int, 
-                       default=config.get('num-downsamples', 3), 
-                       help='total downsampling is 2**[this]')
-    parser.add_argument('--vq-num-embeddings', type=int, 
-                       default=config.get('vq-num-embeddings', 32), 
-                       help='aka codebook length')
-    parser.add_argument('--internal-dim', type=int, 
-                       default=config.get('internal-dim', 256), 
-                       help='pre-vq emb dim before compression')
-    parser.add_argument('--vq-embedding-dim', type=int, 
-                       default=config.get('vq-embedding-dim', 4), 
-                       help='(actual) dims of codebook vectors')
-    parser.add_argument('--codebook-levels', type=int, 
-                       default=config.get('codebook-levels', 4), 
-                       help='number of RVQ levels')
-    parser.add_argument('--commitment-weight', type=float, 
-                       default=config.get('commitment-weight', 0.5), 
-                       help='VQ commitment weight, aka quantization strength')
-    parser.add_argument('--no-wandb', action='store_true', help='disable wandb logging')
-    parser.add_argument('--project-name', type=str, 
-                       default=config.get('project-name', "vqgan-midi"), 
-                       help='WandB project name')
-    parser.add_argument('--run-name', type=str, 
-                       default=config.get('run-name', None), 
-                       help='WandB run name')
-    parser.add_argument('--no-grad-ckpt', action='store_true', 
-                       help='disable gradient checkpointing')
-    parser.add_argument('--lambda-lowres', type=float, default=config.get('lambda-lowres', 0.1), 
-                       help='weighting for low-resolution/bottleneck loss')
-    
-    # Parse args
-    args = parser.parse_args()
-    
-    # Calculate learning rate based on batch size
-    args.learning_rate = args.base_lr * math.sqrt(args.batch_size / 32)
-    args.data = os.path.expanduser(args.data)
-    
-    return args
+@hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
+def main(cfg: DictConfig) -> None:
+    print("Config keys:", list(cfg.keys()))     
+    train_flow(cfg)
 
 
-if __name__ == '__main__':
-    args = parse_args_with_config()
-    print("args = ",args)
-    train_flow(args)
+if __name__ == "__main__":
+    main()

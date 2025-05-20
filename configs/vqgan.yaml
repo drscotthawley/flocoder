@@ -1,0 +1,32 @@
+model:
+    hidden_channels: 256
+    num_downsamples: 3
+    internal_dim: 128
+    vq_embedding_dim: 4
+    codebook_levels: 4
+    vq_num_embeddings: 64
+    commitment-weight: 0.5
+    no_grad_ckpt: False 
+
+# training specific to VQGAN
+training:
+    batch_size: 64
+    learning_rate: 1e-3
+    # warmup is before the adversarial training starts
+    warmup_epochs: 5
+    epochs: 2000
+    # base learning rate gets scaled by the batch size
+    base_lr: 1e-4
+    image_size: 128
+    # regularization parameters
+    lambda_adv: 0.03
+    lambda_ce: 0.0
+    lambda_l1: 0.2
+    lambda_mse: 0.5
+    lambda_perc: 5e-5
+    lambda_spec: 1e-3 
+    lambda_vq: 0.25 
+
+wandb: 
+    project_name: "flocoder-vqgan"
+    # run_name: "best to set via CLI"

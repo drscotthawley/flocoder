@@ -249,11 +249,14 @@ class InfiniteDataset(IterableDataset):
 class PreEncodedDataset(Dataset):
     """for data pre-encoded by the Encoder of the VQVAE model"""
     def __init__(self, data_dir="/data/encoded-POP909", max_cache_items=10000):
+        data_dir = os.path.expanduser(data_dir)
+        print(f"PreEncodedDataset: searching in {data_dir}")
         self.data_dir = Path(data_dir)
         
         # Use fast_scandir for better performance instead of glob
         subdirs, files = fast_scandir(str(self.data_dir), ['pt'])
         self.files = [Path(f) for f in files]
+        print(f"PreEncodedDataset: found {len(self.files)} files")
         
         # Extract class from filenames using regex
         #pattern = re.compile(r'.*_class(\d+)_.*\.pt')

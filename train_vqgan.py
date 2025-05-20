@@ -123,7 +123,7 @@ def train_vqgan(args):
                                             data_path=args.data, num_workers=16, is_midi=is_midi)
 
     # Initialize models and losses
-    model = VQVAE(
+    codec = VQVAE(
         in_channels=3,
         hidden_channels=args.hidden_channels,
         num_downsamples=args.num_downsamples,
@@ -135,7 +135,7 @@ def train_vqgan(args):
         use_checkpoint=not args.no_grad_ckpt,
     ).to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
+    optimizer = optim.Adam(codec.parameters(), lr=args.learning_rate, weight_decay=1e-5)
     scheduler = None # optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.learning_rate, total_steps=args.epochs)
 
     # vgg is used for perceptual loss part of adversarial training
@@ -151,8 +151,8 @@ def train_vqgan(args):
     start_epoch = 0
     if args.load_checkpoint is not None:
         checkpoint = torch.load(args.load_checkpoint, map_location=device)
-        # model.load_state_dict(checkpoint['model_state_dict'])
-        model = load_checkpoint_non_frozen(model,checkpoint)
+        # codec.load_state_dict(checkpoint['codec_state_dict'])
+        codec = load_checkpoint_non_frozen(codec,checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         #start_epoch = checkpoint['epoch'] + 1
         print(f"Resuming training from epoch {start_epoch}")
@@ -167,7 +167,7 @@ def train_vqgan(args):
         if epoch == args.warmup_epochs:
             print("*** WARMUP PERIOD FINISHED. Engaging adversarial training. ***")
 
-        model.train()
+        codec.train()
         epoch_losses = defaultdict(float)
         total_batches = 0
         
@@ -182,7 +182,7 @@ def train_vqgan(args):
 
             # Pre-warmup training
             if epoch < args.warmup_epochs:
-                recon, vq_loss = model(source_imgs)
+                recon, vq_loss = codec(source_imgs)
   
                 losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
                                         adv_loss=None, epoch=epoch, config=args)
@@ -190,13 +190,13 @@ def train_vqgan(args):
                 
                 optimizer.zero_grad()
                 losses['total'].backward()
-                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                nn.utils.clip_grad_norm_(codec.parameters(), max_norm=1.0)
                 optimizer.step()
 
             # Post-warmup training
             else:
                 # Train discriminator
-                recon, vq_loss = model(source_imgs, noise_strength=noise_strength)
+                recon, vq_loss = codec(source_imgs, noise_strength=noise_strength)
                 d_losses, d_stats_list, grad_stats_list = [], [], []
                 
                 for _ in range(1):
@@ -215,7 +215,7 @@ def train_vqgan(args):
 
                 # Train generator
                 if batch_idx % 1 == 0:
-                    recon, vq_loss = model(source_imgs, noise_strength=noise_strength)
+                    recon, vq_loss = codec(source_imgs, noise_strength=noise_strength)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
                                             adv_loss=adv_loss, epoch=epoch, config=args)
 
@@ -223,7 +223,7 @@ def train_vqgan(args):
 
                     optimizer.zero_grad()
                     losses['total'].backward()
-                    nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    nn.utils.clip_grad_norm_(codec.parameters(), max_norm=1.0)
                     optimizer.step()
 
                     # Add discriminator losses
@@ -254,7 +254,7 @@ def train_vqgan(args):
         # Validation phase
         with torch.no_grad():
             # TODO: maybe do some gpu vram garbage collection? 
-            model.eval()
+            codec.eval()
             val_losses = defaultdict(float)
             val_total_batches = 0
             
@@ -264,7 +264,7 @@ def train_vqgan(args):
                     target_imgs = source_imgs
 
                     # Basic validation forward pass
-                    recon, vq_loss, dist_stats = model(source_imgs, get_stats=True)
+                    recon, vq_loss, dist_stats = codec(source_imgs, get_stats=True)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg,
                                             adv_loss=adv_loss, epoch=epoch, config=args)
                     losses['total'] = get_total_vqgan_loss(losses, args)
@@ -306,7 +306,7 @@ def train_vqgan(args):
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:
-            viz_codebooks(model, args, epoch)
+            viz_codebooks(codec, args, epoch)
 
         # Log epoch metrics
         if not args.no_wandb:
@@ -319,7 +319,7 @@ def train_vqgan(args):
             wandb.log(log_dict)
 
         if (epoch + 1) % 250 == 0 and epoch > 0:
-            save_checkpoint(model, epoch, optimizer=optimizer)
+            save_checkpoint(codec, epoch, optimizer=optimizer)
 
         if scheduler:
             scheduler.step()
@@ -407,7 +407,7 @@ def parse_args_with_config():
                        help="reg factor mult'd by VQ commitment loss")
     parser.add_argument('--no-wandb', action='store_true', help='disable wandb logging')
 
-    # Model parameters
+    # ae codec Model parameters
     parser.add_argument('--load-checkpoint', type=str, 
                        default=config.get('load-checkpoint', None), 
                        help='path to load checkpoint to resume training from')

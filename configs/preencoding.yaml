@@ -1,0 +1,7 @@
+# the encoder is the bottleneck, so for speed, don't make batch_size too big or use too many workers
+batch_size: 32
+num_workers: 8
+max_storage_gb: 50
+augs_per: 768
+#vqgan_checkpoint: "checkpoints/final_vqgan_flowers.pt"
+vqgan_checkpoint: "SD"

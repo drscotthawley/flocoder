@@ -1,5 +1,6 @@
 # Oxford flowers dataset If it's not present, then it will be downloaded & set up
-data: "~/datasets/Oxford_Flowers102/images2"
+data: "~/datasets/Oxford_Flowers102/images"
+image_size: 128
 
 vqgan:
     # Parameters specific to VQGAN 
@@ -18,14 +19,13 @@ vqgan:
     
     # training specific to VQGAN
     training:
-        batch_size: 256
+        batch_size: 64
         learning_rate: 1e-3
         # warmup is before the adversarial training starts
         warmup_epochs: 5
         epochs: 2000
         # base learning rate gets scaled by the batch size
         base_lr: 1e-4
-        image_size: 32
         # regularization parameters
         lambda_adv: 0.03
         lambda_ce: 0.0
@@ -36,7 +36,7 @@ vqgan:
         lambda_vq: 0.25 
 
     wandb: 
-        project_name: "lowres-flocoder-vqgan-flowers"
+        project_name: "flocoder-vqgan-flowers"
         # run_name: "best to set via CLI"
 
 
@@ -62,12 +62,12 @@ flow:
         n_classes: 102
         condition: true
     training: 
-        batch_size: 4096
-        learning_rate: 2e-3
+        batch_size: 2048
+        learning_rate: 2e-4
         num_epochs: 10000
-        lambda_lowres: 0.1
+        # can add more later 
 
     wandb:
-        project_name: "lowres-flocoder-flow-flowers"
+        project_name: "flocoder-flow-flowers"
         # run_name: "best to set via CLI"
 

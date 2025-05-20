@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - base
+  - vqgan
+  - flow
+  - preencoding
+  - _self_
+
+# Dataset-specific config - if not present this gets downloaded
+data: "~/datasets/Oxford_Flowers102/images"
+
+# Override specific settings
+codec:
+  choice: sd 
+  #choice: vqgan
+  wandb:
+    project_name: "flocoder-vqgan-flowers"
+
+flow:
+  wandb:
+    project_name: "flocoder-flow-flowers"
