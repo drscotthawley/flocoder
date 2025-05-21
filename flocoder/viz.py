@@ -1,31 +1,31 @@
+import os
 import torch 
 from torchvision.utils import make_grid
 import wandb
 import matplotlib.pyplot as plt
 import tempfile
 import numpy as np
+from PIL import Image
 
 
-#def denormalize(image_batch, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
-def denormalize(image_batch, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):
+
+#def denormalize(image_batch, means=[0.485, 0.456, 0.406], stds=[0.229, 0.224, 0.225]):
+def denormalize(image_batch, means=[0.5, 0.5, 0.5], stds=[0.5, 0.5, 0.5]):
     """undoes transforms normalization, use this before displaying output demo images"""
     # Create a deep copy to avoid modifying the original tensor
     image_batch = image_batch.clone().detach()
 
     # Ensure mean and std are on the same device as image_batch
-    mean = torch.tensor(mean, device=image_batch.device)
-    std = torch.tensor(std, device=image_batch.device)
+    means = torch.tensor(means, device=image_batch.device)
+    stds = torch.tensor(stds, device=image_batch.device)
 
     # For batched input with shape [B, C, H, W]
     # Reshape mean and std for proper broadcasting
     if image_batch.dim() == 4:
-        mean = mean.view(1, 3, 1, 1)
-        std = std.view(1, 3, 1, 1)
+        means = means.view(1, 3, 1, 1)
+        stds = stds.view(1, 3, 1, 1)
 
-    # Apply inverse normalization
-    image_batch = image_batch * std + mean
-
-    return image_batch
+    return image_batch * std + mean # Apply inverse normalization
 
 
 
@@ -104,3 +104,26 @@ def viz_codebooks(model, config, epoch): # RVQ
         })
 
     plt.close()
+
+
+
+def imshow(img, filename):
+    imin, imax = img.min(), img.max()
+    img = (img - imin) / (imax - imin) # rescale via max/min
+    img = np.clip(img, 0, 1)
+    npimg = (img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+    pil_img = Image.fromarray(npimg)
+    pil_img.save(filename)
+
+
+def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="output"):
+    """Save image grid with consistent 10-column layout to match class conditioning"""
+    filename = f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png"
+    # Use nrow=10 to ensure grid columns match our class conditioning
+    img_grid = make_grid(img, nrow=10)
+    file_path = os.path.join(output_dir, filename)
+    imshow(img_grid, file_path)
+    name = f"demo/{tag}{method}"
+    if 'euler' in name: name = name + f"_nf{nfe}"
+    if use_wandb: wandb.log({name: wandb.Image(file_path, caption=f"Epoch: {epoch}")})
+

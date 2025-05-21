@@ -1,33 +1,20 @@
 #! /usr/bin/env python3
 
-## NOTICE: This code is a work in progress and may not run as-is.
-
 import os
-import re
-import math 
 import random
-import matplotlib.pyplot as plt
-import numpy as np
+import gc
 import torch
 import torch.optim as optim
-import torchvision
 from torch.utils.data import DataLoader
 import wandb
-from torchvision import datasets, transforms
-from scipy import integrate  # This is CPU-only
 from tqdm.auto import tqdm
-from PIL import Image
-from pathlib import Path
-from types import SimpleNamespace
 import hydra
-from omegaconf import DictConfig
 
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset
 from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path
-
-import gc
+from flocoder.sampling import sampler, warp_time
 
 
 class EMA:
@@ -69,108 +56,6 @@ class EMA:
                 param.data = self.backup[name].to(self.device)
                 # Clear backup to free memory
                 self.backup[name] = None
-
-
-def to_flattened_numpy(x):
-    return x.detach().cpu().numpy().reshape((-1,))
-
-
-def from_flattened_numpy(x, shape):
-    return torch.from_numpy(x.reshape(shape))
-
-
-def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=3.0):
-    """Runge-Kutta '4.5' order method for integration. Source: Tadao Yamaoka"""
-    rtol = atol = 1e-05
-    model.eval()
-    # Create a grid where each column is a single class (10 columns)
-    cond = None # the conditioning signal to the model
-    if n_classes > 0:
-        cond = torch.randint(n_classes,(10,)).repeat(shape[0] // 10).to(device)
-    
-    with torch.no_grad():
-        # The rest remains the same
-        z0 = torch.randn(shape, device=device)
-        x = z0.detach().clone()
-
-        def ode_func(t, x):
-            x = from_flattened_numpy(x, shape).to(device).type(torch.float32)
-            vec_t = torch.ones(shape[0], device=x.device) * t
-
-            # classifier-free guidance
-            v_cond = model(x, vec_t * 999, cond)
-            v_uncond = model(x, vec_t * 999, None)
-            velocity = v_uncond + cfg_scale * (v_cond - v_uncond) # cfg_scale ~= conditioning strength
-
-            return to_flattened_numpy(velocity)
-
-        # Rest of the implementation unchanged
-        solution = integrate.solve_ivp(
-            ode_func, (eps, 1), to_flattened_numpy(x),
-            rtol=rtol, atol=atol, method="RK45",
-        )
-        nfe = solution.nfev
-        x = torch.tensor(solution.y[:, -1]).reshape(shape).type(torch.float32)
-        model.train()
-        return x, nfe
-
-
-def imshow(img, filename):
-    imin, imax = img.min(), img.max()
-    img = (img - imin) / (imax - imin) # rescale via max/min
-    img = np.clip(img, 0, 1)
-    npimg = (img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-    pil_img = Image.fromarray(npimg)
-    pil_img.save(filename)
-
-
-def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="output"):
-    """Save image grid with consistent 10-column layout to match class conditioning"""
-    filename = f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png"
-    # Use nrow=10 to ensure grid columns match our class conditioning
-    img_grid = torchvision.utils.make_grid(img, nrow=10)
-    file_path = os.path.join(output_dir, filename)
-    imshow(img_grid, file_path)
-    name = f"demo/{tag}{method}"
-    if 'euler' in name: name = name + f"_nf{nfe}"
-    if use_wandb: wandb.log({name: wandb.Image(file_path, caption=f"Epoch: {epoch}")})
-
-
-@torch.no_grad()
-def eval(model, codec, epoch, method, device, sample_N=None, batch_size=100, tag="", 
-         images=None, use_wandb=True, output_dir="output", n_classes=0, latent_shape=(4,16,16)):
-    """Evaluate model by generating samples with class conditioning"""
-    model.eval()
-    # Use a batch size that's a multiple of 10 to ensure proper grid layout
-    # For a 10x10 grid, use batch_size = 100
-    batch_size=100 # hard code this for the image display; ignore other batch size values
-    shape = (batch_size,)+latent_shape
-
-    if images is None:
-        if method == "euler":
-            images, nfe = euler_sampler(model, shape=shape, sample_N=sample_N, device=device, n_classes=n_classes)
-        elif method == "rk45":
-            images, nfe = rk45_sampler(model, shape=shape, device=device, n_classes=n_classes)
-    else:
-        nfe=0
-
-    decoded_images = codec.decode(images.to(device))
-        
-    save_img_grid(images.cpu(), epoch, method, nfe, tag=tag, use_wandb=use_wandb, output_dir=output_dir)
-    save_img_grid(decoded_images.cpu(), epoch, method, nfe, tag=tag+"decoded_", use_wandb=use_wandb, output_dir=output_dir)
-    return model.train()
-
-
-def warp_time(t, dt=None, s=.5):
-    """Parametric Time Warping: s = slope in the middle.
-        s=1 is linear time, s < 1 goes slower near the middle, s>1 goes slower near the ends
-        s = 1.5 gets very close to the "cosine schedule", i.e. (1-cos(pi*t))/2, i.e. sin^2(pi/2*x)"""
-    if s<0 or s>1.5: raise ValueError(f"s={s} is out of bounds.")
-    tw = 4*(1-s)*t**3 + 6*(s-1)*t**2 + (3-2*s)*t
-    if dt:                           # warped time-step requested; use derivative
-        return tw,  dt * 12*(1-s)*t**2 + 12*(s-1)*t + (3-2*s)
-    return tw
-
 
 
 def train_flow(cfg):
@@ -308,10 +193,10 @@ def train_flow(cfg):
             torch.cuda.empty_cache()
             eval_kwargs = {'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
                'latent_shape': latent_shape, 'batch_size': 100}
-            eval(model, codec, epoch, "target_data", device, tag="", images=images, **eval_kwargs)
-            eval(model, codec, epoch, "rk45", device, tag="", **eval_kwargs)
+            sampler(model, codec, epoch, "target_data", device, tag="", images=images, **eval_kwargs)
+            sampler(model, codec, epoch, "rk45", device, tag="", **eval_kwargs)
             ema.eval()
-            eval(model, codec, epoch, "rk45", device, tag="ema_", **eval_kwargs)
+            sampler(model, codec, epoch, "rk45", device, tag="ema_", **eval_kwargs)
             ema.train()
 
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
@@ -324,7 +209,7 @@ def train_flow(cfg):
 
 handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
-def main(cfg: DictConfig) -> None:
+def main(cfg):
     print("Config:", cfg)     
     train_flow(cfg)
 
