@@ -13,6 +13,4 @@ data: "~/datasets/Oxford_Flowers102/images"
 codec:
   choice: sd 
 
-flow:
-  wandb:
-    project_name: "fc-flow-sd-flowers"
+project_name: "fc-flow-sd-flowers"

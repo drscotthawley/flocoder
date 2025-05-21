@@ -3,8 +3,7 @@ data: "~/datasets/Oxford_Flowers102/images"
 image_size: 128
 no_wandb: false
 load_checkpoint: ~
-wandb:
-    run_name: ~
+run_name: ~
 
 vqgan:
     # Parameters specific to VQGAN 
@@ -21,9 +20,9 @@ vqgan:
         commitment-weight: 0.5
         no_grad_ckpt: False 
     
-    wandb: 
-        project_name: "flocoder-vqgan-flowers"
-        # run_name: "best to set via CLI"
+     
+    project_name: "flocoder-vqgan-flowers"
+    # run_name: "best to set via CLI"
 
 
 preencoding: 
@@ -42,6 +41,8 @@ flow:
     batch_size: 2048
     learning_rate: 2e-4
     epochs: 10000
+    project_name: "flocoder-flow-flowers"
+    # run_name: "best to set via CLI"
     model: 
         num_layers: 8
         num_blocks: 4
@@ -50,7 +51,4 @@ flow:
         num_residuals: 2
         n_classes: 102
         condition: true
-    wandb:
-        project_name: "flocoder-flow-flowers"
-        # run_name: "best to set via CLI"
 

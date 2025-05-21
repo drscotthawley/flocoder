@@ -26,6 +26,5 @@ lambda_perc: 5e-5
 lambda_spec: 1e-3 
 lambda_vq: 0.25 
 
-wandb: 
-    project_name: "flocoder-vqgan"
-    # run_name: "best to set via CLI"
+project_name: "flocoder-vqgan"
+# run_name: "best to set via CLI"

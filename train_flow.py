@@ -182,8 +182,8 @@ def train_flow(cfg):
     lambda_lowres = cfg.flow.get('lambda_lowres', 0.1)
     learning_rate = cfg.flow.learning_rate
     epochs = cfg.flow.epochs
-    project_name = cfg.wandb.project_name
-    run_name = cfg.wandb.get('run_name', None)
+    project_name = cfg.project_name
+    run_name = cfg.get('run_name', None)
     no_wandb = cfg.get('no_wandb', False)
     
     print(f"data_path = {data_path}")

@@ -7,6 +7,5 @@ model:
     n_classes: 102
     condition: true
 
-wandb:
-    project_name: "flocoder-flow"
+project_name: "flocoder-flow"
 

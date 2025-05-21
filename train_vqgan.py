@@ -93,6 +93,7 @@ def train_vqgan(cfg):
 
     # Data setup - access config values with appropriate defaults
     is_midi = hasattr(cfg, 'data') and ('pop909' in cfg.data.lower() or 'midi' in cfg.data.lower())
+    print("is_midi =",is_midi)
     batch_size = cfg.get('batch_size', 32)
     image_size = cfg.get('image_size', 128)
     data_path = cfg.get('data', None)
@@ -309,7 +310,7 @@ def train_vqgan(cfg):
                             orig = batch[0][:nrow].to(device)
                             recon = torch.clamp(recon[:nrow], orig.min(), orig.max())
                             if is_midi: orig, recon = g2rgb(orig), g2rgb(recon) # only for midi
-                            viz_images = torch.cat([orig, recon])
+                            viz_images = denormalize( torch.cat([orig, recon]) )
                             caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
                             log_dict['demo/examples'] = wandb.Image(make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
                             wandb.log(log_dict)
