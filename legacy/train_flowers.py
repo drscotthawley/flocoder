@@ -28,7 +28,7 @@ from flocoder.eval.metrics import fid_score
 # import UNet from the legacy dir: Add the directory containing this script to the path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, script_dir)
-from unet import Unet
+from unet_ty import Unet_TY as Unet
 
 
 # run metaparameters

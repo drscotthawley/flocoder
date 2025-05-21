@@ -154,7 +154,7 @@ class PreNorm(nn.Module):
         return self.fn(x)
 
 
-class Unet(nn.Module):
+class Unet_TY(nn.Module):
     def __init__(
         self,
         dim,

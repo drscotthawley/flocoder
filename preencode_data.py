@@ -40,7 +40,7 @@ def setup_dataset(data_path, image_size):
     """Set up and return the appropriate dataset based on the data path."""
     transform = image_transforms(image_size=image_size)
     if data_path is None or 'flowers' in str(data_path).lower():
-        dataset = datasets.Flowers102(root=data_path, split='train', transform=image_transform, download=True)
+        dataset = datasets.Flowers102(root=data_path, split='train', transform=transform, download=True)
     elif 'stl10' in str(data_path).lower():
         dataset = datasets.STL10(root=data_path, split='train', transform=transform, download=True)
     elif 'food101' in str(data_path).lower():

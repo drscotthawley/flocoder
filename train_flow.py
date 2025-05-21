@@ -179,9 +179,9 @@ def train_flow(cfg):
     batch_size = cfg.flow.batch_size
     n_classes = cfg.model.n_classes
     condition = cfg.model.condition
-    lambda_lowres = cfg.training.get('lambda_lowres', 0.1)
-    learning_rate = cfg.training.learning_rate
-    epochs = cfg.training.num_epochs
+    lambda_lowres = cfg.flow.get('lambda_lowres', 0.1)
+    learning_rate = cfg.flow.learning_rate
+    epochs = cfg.flow.epochs
     project_name = cfg.wandb.project_name
     run_name = cfg.wandb.get('run_name', None)
     no_wandb = cfg.get('no_wandb', False)

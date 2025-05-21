@@ -12,7 +12,10 @@ data: "~/datasets/Oxford_Flowers102/images"
 # Override specific settings
 codec:
   choice: resize
-  latent_size: 16x16
+  #latent_shape: [4,16,16]
+  # to compare with TY's code:
+  image_size: 32
+  latent_shape: [3,32,32]
 
 wandb:
   project_name: "fc-flow-resize-flowers"

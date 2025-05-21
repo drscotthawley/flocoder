@@ -501,43 +501,39 @@ class SimpleResizeAE(nn.Module):
     """Just resizes tensors using bilinear interpolation. 
     For testing/exploration - reconstructions will be blocky/blurry."""
     def __init__(self, 
-                 latent_size=None,       # Int or tuple for latent dimensions
-                 in_channels=3,          # Number of input channels (RGB default)
-                 out_channels=None,      # Defaults to in_channels if None
-                 orig_size=None,         # Size to decode back to if known 
-                 extra_channel=True,     # tack on an extra (4th) encoded channel to mimic other latent reps
+                 latent_shape=(4,16,16), # tuple for latent dimensions
                  mode='bicubic',         # interpolation/resampling mode
                  ): 
         super().__init__()
-        self.latent_size   = latent_size
-        self.in_channels   = in_channels
-        self.out_channels  = out_channels if out_channels is not None else in_channels
-        self.orig_size     = orig_size
-        self.extra_channel = extra_channel
+        self.latent_shape  = latent_shape
+        self.orig_shape    = None
         self.mode          = mode
         
     def encode(self, x):
-        """Resize input to latent_size using interpolation."""
-        if self.latent_size is None: return x
-        h, w = (self.latent_size, self.latent_size) if isinstance(self.latent_size, int) else self.latent_size
+        """Resize input to latent_size using interpolation. 
+        any extra latent channels are just copies of the mean"""
+        self.orig_shape = x.shape[1:]   # save orig shape for later decode
+        if self.latent_shape is None: 
+            return x   # No-Op! 
+        c, h, w = self.latent_shape
         small = F.interpolate(x, size=(h, w), mode=self.mode, align_corners=False)
-        if not self.extra_channel: 
+        if c == x.shape[-3]:  # no change in channels
             return small
         mean_channel = torch.mean(small, dim=1, keepdim=True)
-        return torch.cat([small, mean_channel], dim=1)
+        return torch.cat([small, mean_channel.repeat(1, c - x.shape[-3], 1, 1)], dim=1)
 
-    def decode(self, z, orig_size=None, noise_strength=0.0): # noise_strength unused, for API compatibility
+
+    def decode(self, z, orig_shape=None, noise_strength=0.0): # noise_strength unused, for API compatibility
         """Resize latent back to original dimensions."""
-        target_size = orig_size if orig_size is not None else self.orig_size
-        if target_size is None: return z  # Can't resize without target size
-        h, w = (target_size, target_size) if isinstance(target_size, int) else target_size
-        # Only use the first 3 channels for decoding; extra channel is ignored
+        target_shape = orig_shape if orig_shape is not None else self.orig_shape
+        if target_shape is None or target_shape==self.latent_shape: return z    # No-op
+        h, w = (target_shape[-2], target_shape[-1]) 
+        # Only use the first 3 channels for decoding; any extras are 
         return F.interpolate(z[:,:3], size=(h, w), mode=self.mode, align_corners=False)
 
     
     def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
         """Encode and decode in one step, auto-storing original size."""
-        self.orig_size = (x.shape[2], x.shape[3])
         z = self.encode(x)
         recon = self.decode(z)
         if get_stats: return recon, 0.0, {'codebook_mean_dist': 0.0, 'codebook_max_dist': 0.0}
@@ -588,11 +584,7 @@ def load_codec(cfg, device):
 
     if cfg.codec.choice == "resize":
         print("Using SimpleResizeAE")
-        codec = SimpleResizeAE(
-            latent_size=(cfg.get('latent_h', 16), cfg.get('latent_w', 16)),
-            orig_size=cfg.get('image_size',128),
-            in_channels=3,
-        ).eval().to(device)
+        codec = SimpleResizeAE(latent_shape=cfg.codec.get('latent_shape', (4, 16, 16))).eval().to(device)
 
     elif cfg.codec.choice == "sd":
         print("Loading SD VAE via SD_VAE_Wrapper")

@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - base
+  - vqgan
+  - flow
+  - preencoding
+  - _self_
+
+# Dataset-specific config - if not present this gets downloaded
+data: "~/datasets/STL10"
+
+# Override settings for preencoding
+batch_size: 64  
+num_workers: 16  
+max_storage_gb: 50
+augs_per: 128  
+
+# Override specific settings
+codec:
+  choice: sd
+
+flow:
+  model:
+    n_classes: 10  # STL10 has 10 classes
+    condition: true
+  wandb:
+    project_name: "fc-flow-sd-stl"
