@@ -134,13 +134,14 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 - [x] Replace custom config/CLI arg system with Hydra or other package
 - [x] Rename "vae"/"vqvae"/"vqgan" variable as just "codec"
 - [x] Replace Class in `preencode_data.py` with functions as per Style Guide 
+- [x] Research: Figure out why conditioning fails for latent model
 - [ ] Add Contributor Guidelines
 - [ ] Add Standalone sampler script / Gradio demo?
 - [ ] Add Documentation
 - [ ] Improve overall introduction/orientation
 - [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc.
-- [ ] Research: Figure out why conditioning fails for latent model
-- [ ] Research: Figure out how to accelerate training!
+- [ ] Research: Figure out how to accelerate training of flows
+- [ ] Research: Figure out how to accelerate training of vqgan
 - [ ] Ops: Add tests
 - [ ] Ops: Add CI
       

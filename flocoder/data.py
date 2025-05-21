@@ -6,7 +6,7 @@ import random
 import torch 
 from torch.utils.data import Dataset, IterableDataset, DataLoader, random_split
 from torchvision import transforms, datasets
-
+import numpy as np
 from multiprocessing import Pool, cpu_count, set_start_method
 from functools import partial
 from tqdm import tqdm
@@ -80,7 +80,9 @@ def midi_transforms(image_size=128, random_roll=True):
 def image_transforms(image_size=128, 
                      #means=[0.485, 0.456, 0.406], # as per common ImageNet metrics
                      #stds=[0.229, 0.224, 0.225]):
-                     means = [0.5, 0.5, 0.5],   # this works for TY's code
+                     #means=[0.4524607, 0.39065456, 0.30743122], # what I measured from Oxford Flowers
+                     #stds=[0.29211318, 0.24239005, 0.27345273],
+                     means = [0.5, 0.5, 0.5],   # this works for TY's flow code
                      stds = [0.5, 0.5, 0.5]):
     return transforms.Compose([
         transforms.RandomRotation(degrees=15, fill=means),
@@ -324,6 +326,46 @@ class PreEncodedDataset(Dataset):
             fallback = next(iter(self.cache.values()))[0] if self.cache else torch.zeros(4, 16, 16)
             return torch.zeros_like(fallback), torch.tensor(0)
 
+
+
+
+class ColorAwareDataset(Dataset):
+    """Used only for VQGAN & Oxford Flowers: This is a quickie hack I made. 
+    Oxford Flowers is low in blue and high in red, 
+    so this is an attempt to balance out the data distribution for training.
+    What it does: If a given image is high in red and low in blue, it will be rejected (and replaced) with a certain probability.
+    """
+    def __init__(self, base_dataset, 
+                 # all the following numbers were made up, based on a bit of measurement. adjust as needed.
+                 red_thresh=0.4, 
+                 blue_thresh=0.4, 
+                 reject_prob=0.4, 
+                 max_attempts=10):
+        self.base_dataset = base_dataset
+        self.red_thresh = red_thresh
+        self.blue_thresh = blue_thresh
+        self.reject_prob = reject_prob
+        self.max_attempts = max_attempts
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        for _ in range(self.max_attempts):
+            img, label = self.base_dataset[idx]
+            arr = img.numpy() if hasattr(img, 'numpy') else np.array(img)
+            if arr.max() > 1.0: arr = arr / 255.0  # handle PIL images
+            r, g, b = arr[0].mean(), arr[1].mean(), arr[2].mean()
+            # If high red and low blue, maybe reject
+            if r > self.red_thresh and b < self.blue_thresh and np.random.rand() < self.reject_prob:
+                idx = np.random.randint(0, len(self.base_dataset))
+                continue
+            return img, label
+        # If we failed to find a good one, just return the last
+        return img, label
+
+
+
 ### End Datasets
 
 
@@ -343,8 +385,8 @@ def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_p
         val_transforms = image_transforms(image_size)
     
     if data_path is None or 'flowers' in data_path.lower(): # fall back to Oxford Flowers dataset
-        train_base = datasets.Flowers102(root=data_path, split='train', transform=train_transforms, download=True)
-        val_base = datasets.Flowers102(root=data_path, split='val', transform=val_transforms, download=True)
+        train_base = ColorAwareDataset(datasets.Flowers102(root=data_path, split='train', transform=train_transforms, download=True))
+        val_base = ColorAwareDataset(datasets.Flowers102(root=data_path, split='val', transform=val_transforms, download=True))
     elif 'stl10' in str(data_path).lower():
         train_base = datasets.STL10(root=data_path, split='train', transform=train_transforms, download=True)
         val_base = datasets.STL10(root=data_path, split='test', transform=val_transforms, download=True)

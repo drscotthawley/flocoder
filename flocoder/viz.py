@@ -25,7 +25,7 @@ def denormalize(image_batch, means=[0.5, 0.5, 0.5], stds=[0.5, 0.5, 0.5]):
         means = means.view(1, 3, 1, 1)
         stds = stds.view(1, 3, 1, 1)
 
-    return image_batch * std + mean # Apply inverse normalization
+    return image_batch * stds + means # Apply inverse normalization
 
 
 
