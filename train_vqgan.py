@@ -25,7 +25,7 @@ from flocoder.data import create_image_loaders
 from flocoder.codecs import VQVAE, load_codec
 from flocoder.viz import viz_codebooks, denormalize
 from flocoder.metrics import *  # there's a lot
-from flocoder.general import save_checkpoint, handle_config_path
+from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path
 
 
 class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
@@ -84,29 +84,6 @@ def z_to_img(z_compressed, vq_model, debug=False):
     return img 
 
 
-def load_checkpoint_non_frozen(model, checkpoint):
-    """
-    Load only the frozen parameters from a checkpoint into the model.
-    (If no parames were frozen, then this loads the entire model.)
-    """
-    checkpoint_state_dict = checkpoint['model_state_dict']
-    model_state_dict = model.state_dict()
-    filtered_state_dict = {}
-    
-    # Get only frozen parameters
-    for name, param in model.named_parameters():
-        if not param.requires_grad and name in checkpoint_state_dict:
-            filtered_state_dict[name] = checkpoint_state_dict[name]
-    
-    # Include buffers for frozen parts
-    for name, buffer in model.named_buffers():
-        if (name.startswith('encoder.') or name.startswith('compress.')) and name in checkpoint_state_dict:
-            filtered_state_dict[name] = checkpoint_state_dict[name]
-    
-    model_state_dict.update(filtered_state_dict)
-    model.load_state_dict(model_state_dict)
-    print(f"Loaded {len(filtered_state_dict)} frozen parameters.")
-    return model
 
 
 def train_vqgan(cfg):
@@ -160,7 +137,7 @@ def train_vqgan(cfg):
     if load_checkpoint is not None:
         print(f"Loading checkpoint from {load_checkpoint}...")
         checkpoint = torch.load(load_checkpoint, map_location=device)
-        codec = load_checkpoint_non_frozen(codec, checkpoint)
+        codec = load_model_checkpoint(codec, checkpoint, frozen_only=False)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print(f"Resuming training from epoch {start_epoch}")
     else:

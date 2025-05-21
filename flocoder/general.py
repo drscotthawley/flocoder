@@ -29,11 +29,48 @@ def handle_config_path():
             sys.argv.insert(i, f"--config-path={config_dir}")
             break
 
+
 def keep_recent_files(keep=5, directory='checkpoints', pattern='*.pt'):
     # delete all but the n most recent checkpoints/images (so the disk doesn't fill!)
     files = sorted(Path(directory).glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
     for f in files[keep:]:
         f.unlink()
+
+
+
+
+def load_model_checkpoint(model, checkpoint, frozen_only=False):
+    """
+    Load parameters from a checkpoint into the model.
+    If frozen_only=True, loads only frozen parameters. Otherwise, loads all parameters.
+    """
+    checkpoint_state_dict = checkpoint['model_state_dict']
+    model_state_dict = model.state_dict()
+
+    if frozen_only:
+        # Only load frozen parameters (original behavior)
+        filtered_state_dict = {}
+
+        # Get only frozen parameters
+        for name, param in model.named_parameters():
+            if not param.requires_grad and name in checkpoint_state_dict:
+                filtered_state_dict[name] = checkpoint_state_dict[name]
+
+        # Include buffers for frozen parts
+        for name, buffer in model.named_buffers():
+            if (name.startswith('encoder.') or name.startswith('compress.')) and name in checkpoint_state_dict:
+                filtered_state_dict[name] = checkpoint_state_dict[name]
+
+        model_state_dict.update(filtered_state_dict)
+        model.load_state_dict(model_state_dict)
+        print(f"Loaded {len(filtered_state_dict)} frozen parameters.")
+    else:
+        # Load all parameters
+        model.load_state_dict(checkpoint_state_dict)
+        print(f"Loaded all parameters from checkpoint.")
+
+    return model
+
 
 
 def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", ckpt_dir='checkpoints'):
