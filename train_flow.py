@@ -58,18 +58,18 @@ class EMA:
                 self.backup[name] = None
 
 
-def train_flow(cfg):
+def train_flow(config):
     # Extract parameters from config
-    data_path = f"{cfg.data}_encoded_{cfg.codec.choice}"
-    batch_size = cfg.flow.batch_size
-    n_classes = cfg.model.n_classes
-    condition = cfg.model.condition
-    lambda_lowres = cfg.flow.get('lambda_lowres', 0.1)
-    learning_rate = cfg.flow.learning_rate
-    epochs = cfg.flow.epochs
-    project_name = cfg.project_name
-    run_name = cfg.get('run_name', None)
-    no_wandb = cfg.get('no_wandb', False)
+    data_path = f"{config.data}_encoded_{config.codec.choice}"
+    batch_size = config.flow.batch_size
+    n_classes = config.model.n_classes
+    condition = config.model.condition
+    lambda_lowres = config.flow.get('lambda_lowres', 0.1)
+    learning_rate = config.flow.learning_rate
+    epochs = config.flow.epochs
+    project_name = config.project_name
+    run_name = config.get('run_name', None)
+    no_wandb = config.get('no_wandb', False)
     
     print(f"data_path = {data_path}")
 
@@ -109,7 +109,7 @@ def train_flow(cfg):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device =", device)
 
-    codec = load_codec(cfg, device) # Load codec for inference/evaluation
+    codec = load_codec(config, device) # Load codec for inference/evaluation
 
     # Create flow model
     model = Unet(
@@ -128,7 +128,7 @@ def train_flow(cfg):
     use_wandb = not no_wandb
     
     if use_wandb: 
-        wandb.init(project=project_name, name=run_name, config=dict(cfg))
+        wandb.init(project=project_name, name=run_name, config=dict(config))
 
     ema = EMA(model, decay=0.999, device=device)
 
@@ -209,9 +209,9 @@ def train_flow(cfg):
 
 handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
-def main(cfg):
-    print("Config:", cfg)     
-    train_flow(cfg)
+def main(config):
+    print("Config:", config)     
+    train_flow(config)
 
 
 if __name__ == "__main__":

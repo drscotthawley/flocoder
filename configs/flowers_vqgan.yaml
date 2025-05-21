@@ -12,9 +12,7 @@ data: "~/datasets/Oxford_Flowers102/images"
 # Override specific settings
 codec:
   choice: vqgan
-  wandb:
-    project_name: "fc-vqgan-flowers"
+  project_name: "fc-vqgan-flowers"
 
 flow:
-  wandb:
-    project_name: "fc-flow-flowers"
+  project_name: "fc-flow-flowers"

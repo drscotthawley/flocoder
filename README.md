@@ -118,7 +118,9 @@ The flow model operates in the latent space created by the autoencoder.
 
 ```bash
 # Generate new MIDI samples
-./generate_samples.py --checkpoint models/flow_checkpoint.pt --output samples/
+./generate_samples.py --config-name $CONFIG_FILE
+# or with optional gradio UI:
+#./generate_samples.py --config-name $CONFIG_FILE +use_gradio=true
 ```
 
 This generates new samples by sampling from the flow model and decoding through the VQVAE.
@@ -135,9 +137,9 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 - [x] Rename "vae"/"vqvae"/"vqgan" variable as just "codec"
 - [x] Replace Class in `preencode_data.py` with functions as per Style Guide 
 - [x] Research: Figure out why conditioning fails for latent model
+- [x] Add Standalone sampler script / Gradio demo?
 - [ ] Add metrics (to wandb out) to quantify training progress (sinkhorn, FID)
 - [ ] Add Contributor Guidelines
-- [ ] Add Standalone sampler script / Gradio demo?
 - [ ] Add Documentation
 - [ ] Improve overall introduction/orientation
 - [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc.

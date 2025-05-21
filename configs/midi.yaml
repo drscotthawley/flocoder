@@ -13,7 +13,7 @@ data: "~/datasets/POP909_images"
 codec:
   choice: sd
   #choice: vqgan 
-  model:
+  vqgan:
     commitment-weight: 0.6  # Higher for MIDI
   training:
     lambda_ce: 2.0  # Higher cross-entropy for MIDI
@@ -22,6 +22,6 @@ codec:
 flow:
   batch_size: 256 
   project_name: "flocoder-flow-midi"
-  model:
+  unet:
     n_classes: 0
     condition: false

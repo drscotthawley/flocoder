@@ -20,8 +20,8 @@ codec:
   choice: sd
 
 flow:
-  model:
+  unet:
     n_classes: 10  # STL10 has 10 classes
     condition: true
-  wandb:
-    project_name: "fc-flow-sd-stl"
+  
+  project_name: "fc-flow-sd-stl"

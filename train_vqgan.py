@@ -86,18 +86,18 @@ def z_to_img(z_compressed, vq_model, debug=False):
 
 
 
-def train_vqgan(cfg):
-    print("train_vqgan: cfg =",cfg)
+def train_vqgan(config):
+    print("train_vqgan: config =",config)
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
     # Data setup - access config values with appropriate defaults
-    is_midi = hasattr(cfg, 'data') and ('pop909' in cfg.data.lower() or 'midi' in cfg.data.lower())
+    is_midi = hasattr(config, 'data') and ('pop909' in config.data.lower() or 'midi' in config.data.lower())
     print("is_midi =",is_midi)
-    batch_size = cfg.get('batch_size', 32)
-    image_size = cfg.get('image_size', 128)
-    data_path = cfg.get('data', None)
-    num_workers = cfg.get('num_workers', 16)
+    batch_size = config.get('batch_size', 32)
+    image_size = config.get('image_size', 128)
+    data_path = config.get('data', None)
+    num_workers = config.get('num_workers', 16)
     
     train_loader, val_loader = create_image_loaders(
         batch_size=batch_size, 
@@ -110,31 +110,31 @@ def train_vqgan(cfg):
     # Initialize model - either directly or using load_codec
     codec = VQVAE(
         in_channels=3,
-        hidden_channels=cfg.get('hidden_channels', 256),
-        num_downsamples=cfg.get('num_downsamples', 3),
-        vq_num_embeddings=cfg.get('vq_num_embeddings', 512),
-        internal_dim=cfg.get('internal_dim', 256),
-        codebook_levels=cfg.get('codebook_levels', 4),
-        vq_embedding_dim=cfg.get('vq_embedding_dim', 4),
-        commitment_weight=cfg.get('commitment_weight', 0.25),
-        use_checkpoint=not cfg.get('no_grad_ckpt', False),
+        hidden_channels=config.get('hidden_channels', 256),
+        num_downsamples=config.get('num_downsamples', 3),
+        vq_num_embeddings=config.get('vq_num_embeddings', 512),
+        internal_dim=config.get('internal_dim', 256),
+        codebook_levels=config.get('codebook_levels', 4),
+        vq_embedding_dim=config.get('vq_embedding_dim', 4),
+        commitment_weight=config.get('commitment_weight', 0.25),
+        use_checkpoint=not config.get('no_grad_ckpt', False),
     ).to(device)
 
-    optimizer = optim.Adam(codec.parameters(), lr=cfg.get('learning_rate', 1e-4), weight_decay=1e-5)
+    optimizer = optim.Adam(codec.parameters(), lr=config.get('learning_rate', 1e-4), weight_decay=1e-5)
     scheduler = None
 
     # vgg is used for perceptual loss part of adversarial training
     vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
     for param in vgg.parameters():
         param.requires_grad = False    
-    adv_loss = AdversarialLoss(device, use_checkpoint=not cfg.get('no_grad_ckpt', False)).to(device)
+    adv_loss = AdversarialLoss(device, use_checkpoint=not config.get('no_grad_ckpt', False)).to(device)
     d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), 
-                            lr=cfg.get('learning_rate', 1e-4) * 0.1, 
+                            lr=config.get('learning_rate', 1e-4) * 0.1, 
                             weight_decay=1e-5)
 
     # Resume from checkpoint if specified
     start_epoch = 0
-    load_checkpoint = cfg.get('load_checkpoint', None)
+    load_checkpoint = config.get('load_checkpoint', None)
     if load_checkpoint is not None:
         print(f"Loading checkpoint from {load_checkpoint}...")
         checkpoint = torch.load(load_checkpoint, map_location=device)
@@ -145,35 +145,35 @@ def train_vqgan(cfg):
         print(f"No checkpoint specified (load_checkpoint=={load_checkpoint}). Starting from scratch")
 
     # Initialize wandb
-    no_wandb = cfg.get('no_wandb', False)
+    no_wandb = config.get('no_wandb', False)
     if not no_wandb:
-        project_name = cfg.wandb.get('project_name', "vqgan-training")
-        run_name = cfg.wandb.get('run_name', None)
+        project_name = config.wandb.get('project_name', "vqgan-training")
+        run_name = config.wandb.get('run_name', None)
         print("Got run name =",run_name)
-        wandb.init(project=project_name, name=run_name, config=dict(cfg))
+        wandb.init(project=project_name, name=run_name, config=dict(config))
 
     # Training parameters
-    epochs = cfg.get('epochs', 1000000)
-    warmup_epochs = cfg.get('warmup_epochs', 15)
+    epochs = config.get('epochs', 1000000)
+    warmup_epochs = config.get('warmup_epochs', 15)
     
     # Lambda weight parameters with defaults
-    lambda_adv = cfg.get('lambda_adv', 0.03)
-    lambda_ce = cfg.get('lambda_ce', 2.0)
-    lambda_l1 = cfg.get('lambda_l1', 0.2)
-    lambda_mse = cfg.get('lambda_mse', 0.5)
-    lambda_perc = cfg.get('lambda_perc', 1e-5)
-    lambda_spec = cfg.get('lambda_spec', 2e-4)
-    lambda_vq = cfg.get('lambda_vq', 0.25)
+    lambda_adv = config.get('lambda_adv', 0.03)
+    lambda_ce = config.get('lambda_ce', 2.0)
+    lambda_l1 = config.get('lambda_l1', 0.2)
+    lambda_mse = config.get('lambda_mse', 0.5)
+    lambda_perc = config.get('lambda_perc', 1e-5)
+    lambda_spec = config.get('lambda_spec', 2e-4)
+    lambda_vq = config.get('lambda_vq', 0.25)
     
-    # Set lambda values on cfg for compute_vqgan_losses
-    cfg.lambda_adv = lambda_adv
-    cfg.lambda_ce = lambda_ce
-    cfg.lambda_l1 = lambda_l1
-    cfg.lambda_mse = lambda_mse
-    cfg.lambda_perc = lambda_perc
-    cfg.lambda_spec = lambda_spec 
-    cfg.lambda_vq = lambda_vq
-    cfg.warmup_epochs = warmup_epochs
+    # Set lambda values on config for compute_vqgan_losses
+    config.lambda_adv = lambda_adv
+    config.lambda_ce = lambda_ce
+    config.lambda_l1 = lambda_l1
+    config.lambda_mse = lambda_mse
+    config.lambda_perc = lambda_perc
+    config.lambda_spec = lambda_spec 
+    config.lambda_vq = lambda_vq
+    config.warmup_epochs = warmup_epochs
 
     # Main training loop
     for epoch in range(start_epoch, epochs):
@@ -198,8 +198,8 @@ def train_vqgan(cfg):
                 recon, vq_loss = codec(source_imgs)
   
                 losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
-                                        adv_loss=None, epoch=epoch, config=cfg)
-                losses['total'] = get_total_vqgan_loss(losses, cfg)
+                                        adv_loss=None, epoch=epoch, config=config)
+                losses['total'] = get_total_vqgan_loss(losses, config)
                 
                 optimizer.zero_grad()
                 losses['total'].backward()
@@ -230,9 +230,9 @@ def train_vqgan(cfg):
                 if batch_idx % 1 == 0:
                     recon, vq_loss = codec(source_imgs, noise_strength=noise_strength)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
-                                            adv_loss=adv_loss, epoch=epoch, config=cfg)
+                                            adv_loss=adv_loss, epoch=epoch, config=config)
 
-                    losses['total'] = get_total_vqgan_loss(losses, cfg)
+                    losses['total'] = get_total_vqgan_loss(losses, config)
 
                     optimizer.zero_grad()
                     losses['total'].backward()
@@ -279,8 +279,8 @@ def train_vqgan(cfg):
                     # Basic validation forward pass
                     recon, vq_loss, dist_stats = codec(source_imgs, get_stats=True)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg,
-                                            adv_loss=adv_loss, epoch=epoch, config=cfg)
-                    losses['total'] = get_total_vqgan_loss(losses, cfg)
+                                            adv_loss=adv_loss, epoch=epoch, config=config)
+                    losses['total'] = get_total_vqgan_loss(losses, config)
 
                     # Update validation losses
                     batch_losses = {k: v.item() if torch.is_tensor(v) else v for k, v in losses.items()}
@@ -319,7 +319,7 @@ def train_vqgan(cfg):
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:
-            viz_codebooks(codec, cfg, epoch)
+            viz_codebooks(codec, config, epoch)
 
         # Log epoch metrics
         if not no_wandb:
@@ -345,48 +345,48 @@ handle_config_path()
 
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
-def main(cfg):
+def main(config):
     """Main entry point using Hydra."""
-    print("cfg =",cfg)
+    print("config =",config)
     # Set torch options for better performance
     torch.cuda.empty_cache()
     torch.backends.cudnn.benchmark = True
     
     # Extract relevant config sections and handle various structure possibilities
-    vqgan_cfg = None
+    vqgan_config = None
     
     # Check for different possible config structures
-    if hasattr(cfg, 'codec'):
-        vqgan_cfg = cfg.codec
-    elif hasattr(cfg, '_target_'):
+    if hasattr(config, 'codec'):
+        vqgan_config = config.codec
+    elif hasattr(config, '_target_'):
         # Some Hydra configs use this structure
-        vqgan_cfg = cfg
+        vqgan_config = config
     else:
         # Assume the config is directly usable
-        vqgan_cfg = cfg
+        vqgan_config = config
 
-    OmegaConf.set_struct(vqgan_cfg, False)
+    OmegaConf.set_struct(vqgan_config, False)
  
     # Handle the data path - check different possibilities
-    if hasattr(cfg, 'data'):
-        data_path = cfg.data
-        # Add data to vqgan_cfg if it's a dictionary-like object
-        if hasattr(vqgan_cfg, '__setattr__'):
-            vqgan_cfg.data = data_path
+    if hasattr(config, 'data'):
+        data_path = config.data
+        # Add data to vqgan_config if it's a dictionary-like object
+        if hasattr(vqgan_config, '__setattr__'):
+            vqgan_config.data = data_path
         else:
             # If it's a regular dict
-            vqgan_cfg = dict(vqgan_cfg)
-            vqgan_cfg['data'] = data_path
-    if hasattr(cfg, 'load_checkpoint'):
-        vqgan_cfg.load_checkpoint = cfg.load_checkpoint
+            vqgan_config = dict(vqgan_config)
+            vqgan_config['data'] = data_path
+    if hasattr(config, 'load_checkpoint'):
+        vqgan_config.load_checkpoint = config.load_checkpoint
     
     # Print the available keys to help debug
-    print(f"Available top-level config keys: {list(cfg.keys() if hasattr(cfg, 'keys') else dir(cfg))}")
-    if vqgan_cfg is not None and hasattr(vqgan_cfg, 'keys'):
-        print(f"VQGAN config keys: {list(vqgan_cfg.keys())}")
+    print(f"Available top-level config keys: {list(config.keys() if hasattr(config, 'keys') else dir(config))}")
+    if vqgan_config is not None and hasattr(vqgan_config, 'keys'):
+        print(f"VQGAN config keys: {list(vqgan_config.keys())}")
     
     # Pass the config to the training function
-    train_vqgan(vqgan_cfg)
+    train_vqgan(vqgan_config)
     return "Training complete"
 
 if __name__ == "__main__":

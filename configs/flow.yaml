@@ -1,4 +1,4 @@
-model: 
+unet: 
     num_layers: 8
     num_blocks: 4
     num_heads: 8

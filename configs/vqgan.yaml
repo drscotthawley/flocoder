@@ -1,12 +1,11 @@
-model:
-    hidden_channels: 256
-    num_downsamples: 3
-    internal_dim: 128
-    vq_embedding_dim: 4
-    codebook_levels: 4
-    vq_num_embeddings: 64
-    commitment-weight: 0.5
-    no_grad_ckpt: False 
+hidden_channels: 256
+num_downsamples: 3
+internal_dim: 128
+vq_embedding_dim: 4
+codebook_levels: 4
+vq_num_embeddings: 64
+commitment-weight: 0.5
+no_grad_ckpt: False 
 
 #training specific to VQGAN
 batch_size: 64

@@ -10,15 +10,14 @@ vqgan:
     # Note: the following sub-hierarchy is (i.e., model:, training:) 
     #     is not required; in fact it gets flattened.
     # Only used for user readability
-    model:
-        hidden_channels: 256
-        num_downsamples: 3
-        internal_dim: 128
-        vq_embedding_dim: 4
-        codebook_levels: 4
-        vq_num_embeddings: 64
-        commitment-weight: 0.5
-        no_grad_ckpt: False 
+    hidden_channels: 256
+    num_downsamples: 3
+    internal_dim: 128
+    vq_embedding_dim: 4
+    codebook_levels: 4
+    vq_num_embeddings: 64
+    commitment-weight: 0.5
+    no_grad_ckpt: False 
     
      
     project_name: "flocoder-vqgan-flowers"
@@ -43,7 +42,7 @@ flow:
     epochs: 10000
     project_name: "flocoder-flow-flowers"
     # run_name: "best to set via CLI"
-    model: 
+    unet: 
         num_layers: 8
         num_blocks: 4
         num_heads: 8

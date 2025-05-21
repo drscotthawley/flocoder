@@ -151,11 +151,11 @@ def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, n
 
 handle_config_path()  # allow for full path in --config-name
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
-def main(cfg) -> None:
+def main(config) -> None:
     """Main entry point using Hydra."""
     # Debug - print the config structure
-    print("Config keys:", list(cfg.keys()))
-    print("Full config:", cfg)
+    print("Config keys:", list(config.keys()))
+    print("Full config:", config)
 
     # Set up CUDA
     torch.cuda.empty_cache()
@@ -167,15 +167,15 @@ def main(cfg) -> None:
     print(f"Using device: {device}")
     
     # Get configuration values with defaults
-    data_path = cfg.data
-    output_dir = f"{data_path}_encoded_{cfg.codec.choice}" if not cfg.get('output_dir') else cfg.output_dir
-    image_size = cfg.get('image_size', 128)
-    max_storage_gb = cfg.get('max_storage_gb', 50)
-    batch_size = cfg.get('batch_size', 32)
-    augs_per = cfg.get('augs_per', 512)
-    num_workers = cfg.get('num_workers', min(int(os.cpu_count() * 0.75), 64))
+    data_path = config.data
+    output_dir = f"{data_path}_encoded_{config.codec.choice}" if not config.get('output_dir') else config.output_dir
+    image_size = config.get('image_size', 128)
+    max_storage_gb = config.get('max_storage_gb', 50)
+    batch_size = config.get('batch_size', 32)
+    augs_per = config.get('augs_per', 512)
+    num_workers = config.get('num_workers', min(int(os.cpu_count() * 0.75), 64))
     
-    codec = load_codec(cfg, device)
+    codec = load_codec(config, device)
     
     # Setup dataset and output directory
     dataset = setup_dataset(data_path, image_size)
