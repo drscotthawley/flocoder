@@ -19,7 +19,7 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import wandb
 from tqdm.auto import tqdm
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf, open_dict
 
 from flocoder.data import create_image_loaders
 from flocoder.codecs import VQVAE, load_codec
@@ -110,6 +110,7 @@ def load_checkpoint_non_frozen(model, checkpoint):
 
 
 def train_vqgan(cfg):
+    print("train_vqgan: cfg =",cfg)
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
@@ -157,16 +158,20 @@ def train_vqgan(cfg):
     start_epoch = 0
     load_checkpoint = cfg.get('load_checkpoint', None)
     if load_checkpoint is not None:
+        print(f"Loading checkpoint from {load_checkpoint}...")
         checkpoint = torch.load(load_checkpoint, map_location=device)
         codec = load_checkpoint_non_frozen(codec, checkpoint)
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print(f"Resuming training from epoch {start_epoch}")
+    else:
+        print(f"No checkpoint specified (load_checkpoint=={load_checkpoint}). Starting from scratch")
 
     # Initialize wandb
     no_wandb = cfg.get('no_wandb', False)
     if not no_wandb:
         project_name = cfg.wandb.get('project_name', "vqgan-training")
         run_name = cfg.wandb.get('run_name', None)
+        print("Got run name =",run_name)
         wandb.init(project=project_name, name=run_name, config=dict(cfg))
 
     # Training parameters
@@ -326,7 +331,7 @@ def train_vqgan(cfg):
                             nrow=8  # number of examples of each to show
                             orig = batch[0][:nrow].to(device)
                             recon = torch.clamp(recon[:nrow], orig.min(), orig.max())
-                            orig, recon = g2rgb(orig), g2rgb(recon)
+                            if is_midi: orig, recon = g2rgb(orig), g2rgb(recon) # only for midi
                             viz_images = torch.cat([orig, recon])
                             caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
                             log_dict['demo/examples'] = wandb.Image(make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
@@ -360,23 +365,11 @@ def train_vqgan(cfg):
 # Process any direct config file paths
 handle_config_path()
 
+
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
 def main(cfg):
     """Main entry point using Hydra."""
-    # Debug output to understand the config structure
-    print("\nConfig structure:")
-    print(f"Type of cfg: {type(cfg)}")
-    print(f"Keys/attributes in cfg: {dir(cfg)}")
-
-    # Use the config directly without modifications
-    print("\nPassing config directly to train_vqgan")
-    train_vqgan(cfg)
-    return "Training complete"
-
-
-@hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
-def main_old(cfg):
-    """Main entry point using Hydra."""
+    print("cfg =",cfg)
     # Set torch options for better performance
     torch.cuda.empty_cache()
     torch.backends.cudnn.benchmark = True
@@ -385,15 +378,17 @@ def main_old(cfg):
     vqgan_cfg = None
     
     # Check for different possible config structures
-    if hasattr(cfg, 'vqgan'):
-        vqgan_cfg = cfg.vqgan
+    if hasattr(cfg, 'codec'):
+        vqgan_cfg = cfg.codec
     elif hasattr(cfg, '_target_'):
         # Some Hydra configs use this structure
         vqgan_cfg = cfg
     else:
         # Assume the config is directly usable
         vqgan_cfg = cfg
-    
+
+    OmegaConf.set_struct(vqgan_cfg, False)
+ 
     # Handle the data path - check different possibilities
     if hasattr(cfg, 'data'):
         data_path = cfg.data
@@ -404,6 +399,8 @@ def main_old(cfg):
             # If it's a regular dict
             vqgan_cfg = dict(vqgan_cfg)
             vqgan_cfg['data'] = data_path
+    if hasattr(cfg, 'load_checkpoint'):
+        vqgan_cfg.load_checkpoint = cfg.load_checkpoint
     
     # Print the available keys to help debug
     print(f"Available top-level config keys: {list(cfg.keys() if hasattr(cfg, 'keys') else dir(cfg))}")

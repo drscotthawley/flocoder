@@ -11,7 +11,6 @@ data: "~/datasets/Oxford_Flowers102/images"
 
 # Override specific settings
 codec:
-  #choice: sd 
   choice: vqgan
   wandb:
     project_name: "fc-vqgan-flowers"
