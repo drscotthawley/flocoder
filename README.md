@@ -135,6 +135,7 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 - [x] Rename "vae"/"vqvae"/"vqgan" variable as just "codec"
 - [x] Replace Class in `preencode_data.py` with functions as per Style Guide 
 - [x] Research: Figure out why conditioning fails for latent model
+- [ ] Add metrics (to wandb out) to quantify training progress (sinkhorn, FID)
 - [ ] Add Contributor Guidelines
 - [ ] Add Standalone sampler script / Gradio demo?
 - [ ] Add Documentation
