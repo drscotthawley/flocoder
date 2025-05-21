@@ -92,29 +92,30 @@ def compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, adv_loss=None, epoch=
     }
     
     # Only add adversarial losses after warmup
-    if adv_loss is not None and epoch >= config.warmup_epochs:
+    if adv_loss is not None and epoch >= config.codec.warmup_epochs:
         d_loss, real_features = adv_loss.discriminator_loss(target_imgs, recon)
         g_loss = adv_loss.generator_loss(recon, real_features)
         losses['d_loss'] = d_loss
-        losses['g_loss'] = config.lambda_adv * g_loss
+        losses['g_loss'] = config.codec.lambda_adv * g_loss
 
     return losses
 
 
-def get_total_vqgan_loss(losses, config=None):
+def get_total_vqgan_loss(losses, config):
     """Compute weighted sum of losses."""
+    cc = config.codec 
     total = (
-        config.lambda_mse*losses['mse'] + \
-        config.lambda_l1*losses['huber'] + \
-        config.lambda_vq*losses['vq'] + \
-        config.lambda_perc * losses['perceptual'] + \
-        config.lambda_spec * losses['spectral'] \
-        + config.lambda_ce*losses['ce']
+        cc.lambda_mse*losses['mse'] + \
+        cc.lambda_l1*losses['huber'] + \
+        cc.lambda_vq*losses['vq'] + \
+        cc.lambda_perc * losses['perceptual'] + \
+        cc.lambda_spec * losses['spectral'] \
+        + cc.lambda_ce*losses['ce']
     )
 
     if 'g_loss' in losses: total = total + losses['g_loss']
     # note: d_loss gets updated elsewhere and not included in total vqgan loss
-    if 's_loss' in losses: total = total + config.lambda_sinkhorn*losses['s_loss'] # haven't found this helpful, so s_loss probably won't be in there
+    if 's_loss' in losses: total = total + cc.lambda_sinkhorn*losses['s_loss'] # haven't found this helpful, so s_loss probably won't be in there
 
 
     return total

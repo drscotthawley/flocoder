@@ -91,6 +91,21 @@ def train_vqgan(config):
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
+
+    def ldcfg(key, default, supply_defaults=False, debug=True): 
+        # little helper function: hydra/omegaconf is nice but also a giant pain. 
+        # ithis gives precedence to anything in vqgan section, else falls back to main config, else default, else None
+        # re. supply_defaults: Hydra is tricksy enough that for some things you may just want execution to crash if config is misread
+        cfg_dict = config
+        if hasattr(config, 'to_container'):  # OmegaConf objects
+            cfg_dict = OmegaConf.to_container(config, resolve=True)
+        if 'codec' in cfg_dict and key in cfg_dict['codec']: return cfg_dict['codec'][key]
+        elif key in cfg_dict: return cfg_dict[key]
+
+        if debug: print(f"Nope: couldn't find key {key} anywhere in config={cfg_dict}")
+        return default if supply_defaults else None
+
+
     # Data setup - access config values with appropriate defaults
     is_midi = hasattr(config, 'data') and ('pop909' in config.data.lower() or 'midi' in config.data.lower())
     print("is_midi =",is_midi)
@@ -99,25 +114,20 @@ def train_vqgan(config):
     data_path = config.get('data', None)
     num_workers = config.get('num_workers', 16)
     
-    train_loader, val_loader = create_image_loaders(
-        batch_size=batch_size, 
-        image_size=image_size, 
-        data_path=data_path, 
-        num_workers=num_workers, 
-        is_midi=is_midi
-    )
+    train_loader, val_loader = create_image_loaders( batch_size=batch_size, image_size=image_size, data_path=data_path, 
+        num_workers=num_workers, is_midi=is_midi)
 
     # Initialize model - either directly or using load_codec
     codec = VQVAE(
         in_channels=3,
-        hidden_channels=config.get('hidden_channels', 256),
-        num_downsamples=config.get('num_downsamples', 3),
-        vq_num_embeddings=config.get('vq_num_embeddings', 512),
-        internal_dim=config.get('internal_dim', 256),
-        codebook_levels=config.get('codebook_levels', 4),
-        vq_embedding_dim=config.get('vq_embedding_dim', 4),
-        commitment_weight=config.get('commitment_weight', 0.25),
-        use_checkpoint=not config.get('no_grad_ckpt', False),
+        hidden_channels   = ldcfg('hidden_channels', 256),
+        num_downsamples   = ldcfg('num_downsamples', 3),
+        vq_num_embeddings = ldcfg('vq_num_embeddings', 64),
+        internal_dim      = ldcfg('internal_dim', 128),
+        vq_embedding_dim  = ldcfg('vq_embedding_dim', 4),
+        codebook_levels   = ldcfg('codebook_levels', 4),
+        commitment_weight = ldcfg('commitment_weight', 0.25),
+        use_checkpoint    = not ldcfg('no_grad_ckpt', False),
     ).to(device)
 
     optimizer = optim.Adam(codec.parameters(), lr=config.get('learning_rate', 1e-4), weight_decay=1e-5)
@@ -145,36 +155,17 @@ def train_vqgan(config):
         print(f"No checkpoint specified (load_checkpoint=={load_checkpoint}). Starting from scratch")
 
     # Initialize wandb
-    no_wandb = config.get('no_wandb', False)
-    if not no_wandb:
-        project_name = config.wandb.get('project_name', "vqgan-training")
-        run_name = config.wandb.get('run_name', None)
+    no_wandb = ldcfg('no_wandb', False)
+    if not no_wandb: # who loves a double negative?
+        project_name = ldcfg('project_name', "fc-vqgan")
+        run_name = ldcfg('run_name', None)
         print("Got run name =",run_name)
         wandb.init(project=project_name, name=run_name, config=dict(config))
 
     # Training parameters
-    epochs = config.get('epochs', 1000000)
-    warmup_epochs = config.get('warmup_epochs', 15)
+    epochs = ldcfg('epochs', 1000000)
+    warmup_epochs = ldcfg('warmup_epochs', 15)
     
-    # Lambda weight parameters with defaults
-    lambda_adv = config.get('lambda_adv', 0.03)
-    lambda_ce = config.get('lambda_ce', 2.0)
-    lambda_l1 = config.get('lambda_l1', 0.2)
-    lambda_mse = config.get('lambda_mse', 0.5)
-    lambda_perc = config.get('lambda_perc', 1e-5)
-    lambda_spec = config.get('lambda_spec', 2e-4)
-    lambda_vq = config.get('lambda_vq', 0.25)
-    
-    # Set lambda values on config for compute_vqgan_losses
-    config.lambda_adv = lambda_adv
-    config.lambda_ce = lambda_ce
-    config.lambda_l1 = lambda_l1
-    config.lambda_mse = lambda_mse
-    config.lambda_perc = lambda_perc
-    config.lambda_spec = lambda_spec 
-    config.lambda_vq = lambda_vq
-    config.warmup_epochs = warmup_epochs
-
     # Main training loop
     for epoch in range(start_epoch, epochs):
         if epoch == warmup_epochs:
@@ -319,7 +310,7 @@ def train_vqgan(config):
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:
-            viz_codebooks(codec, config, epoch)
+            viz_codebooks(codec, epoch, no_wandb=no_wandb)
 
         # Log epoch metrics
         if not no_wandb:
@@ -347,46 +338,11 @@ handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
 def main(config):
     """Main entry point using Hydra."""
-    print("config =",config)
     # Set torch options for better performance
     torch.cuda.empty_cache()
     torch.backends.cudnn.benchmark = True
     
-    # Extract relevant config sections and handle various structure possibilities
-    vqgan_config = None
-    
-    # Check for different possible config structures
-    if hasattr(config, 'codec'):
-        vqgan_config = config.codec
-    elif hasattr(config, '_target_'):
-        # Some Hydra configs use this structure
-        vqgan_config = config
-    else:
-        # Assume the config is directly usable
-        vqgan_config = config
-
-    OmegaConf.set_struct(vqgan_config, False)
- 
-    # Handle the data path - check different possibilities
-    if hasattr(config, 'data'):
-        data_path = config.data
-        # Add data to vqgan_config if it's a dictionary-like object
-        if hasattr(vqgan_config, '__setattr__'):
-            vqgan_config.data = data_path
-        else:
-            # If it's a regular dict
-            vqgan_config = dict(vqgan_config)
-            vqgan_config['data'] = data_path
-    if hasattr(config, 'load_checkpoint'):
-        vqgan_config.load_checkpoint = config.load_checkpoint
-    
-    # Print the available keys to help debug
-    print(f"Available top-level config keys: {list(config.keys() if hasattr(config, 'keys') else dir(config))}")
-    if vqgan_config is not None and hasattr(vqgan_config, 'keys'):
-        print(f"VQGAN config keys: {list(vqgan_config.keys())}")
-    
-    # Pass the config to the training function
-    train_vqgan(vqgan_config)
+    train_vqgan(config)
     return "Training complete"
 
 if __name__ == "__main__":

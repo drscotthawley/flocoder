@@ -5,24 +5,8 @@ no_wandb: false
 load_checkpoint: ~
 run_name: ~
 
-vqgan:
-    # Parameters specific to VQGAN 
-    # Note: the following sub-hierarchy is (i.e., model:, training:) 
-    #     is not required; in fact it gets flattened.
-    # Only used for user readability
-    hidden_channels: 256
-    num_downsamples: 3
-    internal_dim: 128
-    vq_embedding_dim: 4
-    codebook_levels: 4
-    vq_num_embeddings: 64
-    commitment-weight: 0.5
-    no_grad_ckpt: False 
-    
-     
-    project_name: "flocoder-vqgan-flowers"
-    # run_name: "best to set via CLI"
-
+codec:
+  choice: sd
 
 preencoding: 
     # the encoder is the bottleneck, so for speed, don't make batch_size too big or use too many workers

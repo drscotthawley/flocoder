@@ -29,12 +29,7 @@ def denormalize(image_batch, means=[0.5, 0.5, 0.5], stds=[0.5, 0.5, 0.5]):
 
 
 
-def viz_codebooks(model, config, epoch): # RVQ
-    # Check if no_wandb is directly in config or in top level
-    if hasattr(config, 'no_wandb') and config.no_wandb:
-        return
-    if hasattr(config, 'get') and config.get('no_wandb', False):
-        return
+def viz_codebooks(model, epoch, no_wandb=False): # RVQ
 
     # Extract codebook vectors from all levels
     codebook_vectors = [codebook.detach().cpu().numpy() 
