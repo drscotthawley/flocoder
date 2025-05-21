@@ -3,7 +3,7 @@ data: "~/datasets/Oxford_Flowers102/images"
 image_size: 128
 no_wandb: false
 wandb:
-    run_name: None
+    run_name: ~
 
 vqgan:
     # Parameters specific to VQGAN 

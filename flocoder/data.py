@@ -78,8 +78,10 @@ def midi_transforms(image_size=128, random_roll=True):
 
 
 def image_transforms(image_size=128, 
-                     means=[0.485, 0.456, 0.406], # as per common ImageNet metrics
-                     stds=[0.229, 0.224, 0.225]):
+                     #means=[0.485, 0.456, 0.406], # as per common ImageNet metrics
+                     #stds=[0.229, 0.224, 0.225]):
+                     means = [0.5, 0.5, 0.5],   # this works for TY's code
+                     stds = [0.5, 0.5, 0.5]):
     return transforms.Compose([
         transforms.RandomRotation(degrees=15, fill=means),
         transforms.Lambda(lambda img: transforms.CenterCrop(int(min(img.size) * 0.9))(img)), # Crop to 90% to avoid rotation artifacts
@@ -237,81 +239,90 @@ class InfiniteDataset(IterableDataset):
         self.dataset = base_dataset
         self.actual_len = len(self.dataset)
         assert shuffle, "InfiniteDataset only supports shuffle=True for now"
-    
+
+        # Pass through all attributes from base_dataset
+        for attr in dir(base_dataset):
+            if not attr.startswith('__') and not callable(getattr(base_dataset, attr)) and not hasattr(self, attr):
+                try: setattr(self, attr, getattr(base_dataset, attr))
+                except (AttributeError, TypeError): pass
+
     def __iter__(self):
-        while True:
-            # Generate a random index
-            idx = random.randint(0, self.actual_len - 1)
-            # Get the item from the base dataset
-            yield self.dataset[idx]
+        while True: yield self.dataset[random.randint(0, self.actual_len - 1)]
+
 
 
 class PreEncodedDataset(Dataset):
-    """for data pre-encoded by the Encoder of the VQVAE model"""
-    def __init__(self, data_dir="/data/encoded-POP909", max_cache_items=10000):
+    """Loads pre-encoded latent tensors with robust class handling"""
+    def __init__(self, data_dir, max_cache_items=10000):
         data_dir = os.path.expanduser(data_dir)
-        print(f"PreEncodedDataset: searching in {data_dir}")
         self.data_dir = Path(data_dir)
-        
-        # Use fast_scandir for better performance instead of glob
-        subdirs, files = fast_scandir(str(self.data_dir), ['pt'])
-        self.files = [Path(f) for f in files]
-        print(f"PreEncodedDataset: found {len(self.files)} files")
-        
-        # Extract class from filenames using regex
-        #pattern = re.compile(r'.*_class(\d+)_.*\.pt')
-        pattern = re.compile(r'sample_\d+_(\d+)_[a-z0-9]+\.pt')
-        
-        # Get all unique class numbers to determine total number of classes
-        self.class_numbers = set()
-        for f in self.files:
-            match = pattern.match(f.name)
-            if match:
-                self.class_numbers.add(int(match.group(1)))
-        
-        self.n_classes = len(self.class_numbers) if self.class_numbers else 0
-        #print(f"Found {len(self.files)} encoded samples across {self.n_classes} classes")
-        
-        # Initialize cache for faster access
-        self.cache = {}
+        print(f"PreEncodedDataset: loading from {data_dir}")
+
+        # Check for class directories (numeric directories)
+        class_dirs = [d for d in self.data_dir.iterdir() if d.is_dir() and d.name.isdigit()]
+
+        self.files, self._labels = [], []
+        self.has_classes = len(class_dirs) > 0
+
+        if self.has_classes:
+            # Class directories found - use class-based structure
+            self.n_classes = len(class_dirs)
+            self.class_to_idx = {int(d.name): i for i, d in enumerate(sorted(class_dirs))}
+
+            # Collect files from each class directory
+            for class_dir in sorted(class_dirs):
+                class_idx = self.class_to_idx[int(class_dir.name)]
+                _, class_files = fast_scandir(str(class_dir), ['pt'])
+                self.files.extend([Path(f) for f in class_files])
+                self._labels.extend([class_idx] * len(class_files))
+        else:
+            # No class structure - get files from subdirs or flat structure
+            subdirs = [d for d in self.data_dir.iterdir() if d.is_dir()]
+            if subdirs:
+                for subdir in subdirs:
+                    _, subdir_files = fast_scandir(str(subdir), ['pt'])
+                    self.files.extend([Path(f) for f in subdir_files])
+            else:
+                _, flat_files = fast_scandir(str(self.data_dir), ['pt'])
+                self.files = [Path(f) for f in flat_files]
+            self.n_classes = 0
+            self._labels = [0] * len(self.files)  # All zeros for no-class datasets
+
+        self.actual_len = len(self.files)  # Store for reference
+        self.cache = {}  # Initialize memory cache
         self.max_cache_items = max_cache_items
-        print(f"Using memory cache with max {max_cache_items} items")
+
+        # Log basic dataset info
+        print(f"Found {self.actual_len} samples" +
+              (f" across {self.n_classes} classes" if self.has_classes else ""))
 
     def __len__(self):
-        return len(self.files)
+        return self.actual_len
 
     def __getitem__(self, idx):
-        # Check if item is in cache
-        if idx in self.cache:
-            return self.cache[idx]
-        
-        # If not in cache, load from disk
-        file_path = self.files[idx]
+        if idx in self.cache: return self.cache[idx]  # Return cached item if available
 
-        # Extract class from filename if present
-        #match = re.match(r'.*_class(\d+)_.*\.pt', file_path.name)
-        match = re.match(r'sample_\d+_(\d+)_[a-z0-9]+\.pt', file_path.name)
-        class_idx = int(match.group(1)) if match else 0
-        #print(f"Loaded sample from {file_path.name} with class_idx: {class_idx}")
-        
-        # Load the encoded tensor directly
-        encoded = torch.load(file_path, map_location='cpu')
-        
-        # Create the return tuple
-        item = (encoded, torch.tensor(class_idx, dtype=torch.long))
-        
-        # Add to cache if not full
-        if len(self.cache) < self.max_cache_items:
-            self.cache[idx] = item
-        # If cache is full, replace a random item
-        # This is simpler than LRU and still effective for random access patterns
-        elif random.random() < 0.01:  # 1% chance to replace an existing cache item
-            random_key = random.choice(list(self.cache.keys()))
-            del self.cache[random_key]
-            self.cache[idx] = item
-        
-        return item
-    
+        file_path = self.files[idx]
+        class_idx = self._labels[idx]
+
+        try:
+            encoded = torch.load(file_path, map_location='cpu')
+            item = (encoded, torch.tensor(class_idx, dtype=torch.long))
+
+            # Update cache with simple random replacement policy
+            if len(self.cache) < self.max_cache_items:
+                self.cache[idx] = item
+            elif random.random() < 0.01:  # 1% chance to replace existing item
+                random_key = random.choice(list(self.cache.keys()))
+                del self.cache[random_key]
+                self.cache[idx] = item
+
+            return item
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+            # Return zeros with same shape as other items or fallback shape
+            fallback = next(iter(self.cache.values()))[0] if self.cache else torch.zeros(4, 16, 16)
+            return torch.zeros_like(fallback), torch.tensor(0)
 
 ### End Datasets
 

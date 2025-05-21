@@ -6,25 +6,27 @@ import tempfile
 import numpy as np
 
 
-def denormalize(image_batch, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+#def denormalize(image_batch, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]):
+def denormalize(image_batch, mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]):
     """undoes transforms normalization, use this before displaying output demo images"""
     # Create a deep copy to avoid modifying the original tensor
     image_batch = image_batch.clone().detach()
-    
+
     # Ensure mean and std are on the same device as image_batch
     mean = torch.tensor(mean, device=image_batch.device)
     std = torch.tensor(std, device=image_batch.device)
-    
+
     # For batched input with shape [B, C, H, W]
     # Reshape mean and std for proper broadcasting
     if image_batch.dim() == 4:
         mean = mean.view(1, 3, 1, 1)
         std = std.view(1, 3, 1, 1)
-    
+
     # Apply inverse normalization
     image_batch = image_batch * std + mean
-    
+
     return image_batch
+
 
 
 def viz_codebooks(model, config, epoch): # RVQ

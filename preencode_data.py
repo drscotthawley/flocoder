@@ -72,104 +72,81 @@ def setup_output_dir(output_dir):
 
 
 def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, num_workers, device, augs_per=512):
-    """Process dataset with parallel processing and threaded file saving."""
+    """Process dataset with optimized parallel encoding and saving"""
     print(f"Processing dataset with {dataset.actual_len} images")
-    
-    # Track storage usage
+    print(f"Dataset type: {type(dataset)}")
+    n_classes = 0
+    if hasattr(dataset, '_labels'):
+        n_classes = len(set(dataset._labels))
+    has_classes = n_classes > 0
+    print(f"has_classes value: {has_classes}")
     current_storage = 0
     storage_lock = threading.Lock()
-    
-    # Enable pinned memory for faster CPU->GPU transfers
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=batch_size,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,  # Prefetch batches
-    )
+
+    # Setup dataloader with optimizations
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=num_workers,
+                                            pin_memory=True, persistent_workers=True, prefetch_factor=2)
     max_batches = (augs_per * dataset.actual_len + 1) // batch_size
-    print(f"Max batches to process: {max_batches}")
-    
-    print(f"\n{'='*80}")
-    print(f"Processing up to {max_batches} batches with optimizations")
-    print(f"Storage limit: {max_storage_bytes/1024**3:.1f} GB")
-    print(f"Batch size: {batch_size}")
-    print(f"Number of workers: {num_workers}")
-    print(f"Average number of augmentations per image: {augs_per}")
-    print(f"{'='*80}")
-    
-    # Create a thread pool for file I/O
+
+    # Create class directories if needed
+    if has_classes:
+        print("n_classes =",n_classes)
+        for class_idx in range(n_classes):
+            (output_dir / str(class_idx)).mkdir(exist_ok=True)
+
+    # Process batches with thread pool for I/O
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-        # Create a progress bar
-        with tqdm(total=max_batches, desc=f"Processing batches [0.00/{max_storage_bytes/1024**3:.1f} GB (0%)]") as pbar:
+        with tqdm(total=max_batches, desc=f"Processing [0.00/{max_storage_bytes/1024**3:.1f} GB (0%)]") as pbar:
             for batch_idx, (images, classes) in enumerate(dataloader):
-                if batch_idx >= max_batches:
-                    break
-                    
-                if current_storage >= max_storage_bytes:
-                    print(f"\nStorage limit reached: {current_storage/1024**3:.2f} GB")
-                    break
-                
-                encoded_batch = encode_batch(codec, images, device) # Process batch
-                
-                future_to_filename = {} # Submit file saving tasks to thread pool
-                
-                # Process each sample in the batch
+                if batch_idx >= max_batches or current_storage >= max_storage_bytes: break
+
+                encoded_batch = encode_batch(codec, images, device)
+                future_to_path = {}
+
+                # Submit file saving tasks
+                class_indices = set()
                 for i in range(encoded_batch.shape[0]):
-                    # Get single encoding and class
-                    encoding = encoded_batch[i].cpu()  # Move to CPU for saving
+                    encoding = encoded_batch[i].cpu()
                     class_idx = classes[i].item() if isinstance(classes, torch.Tensor) else classes
-                    
-                    # Create filename with class info and use hierarchical directories
+                    class_indices.add(class_idx)
                     sample_id = f"{batch_idx}_{i}"
-                    # Use first 2 digits as subdirectory to avoid too many files in one dir
-                    sub_dir = f"{batch_idx % 100:02d}"
-                    sub_dir_path = output_dir / sub_dir
-                    
-                    # Create subdirectory if it doesn't exist
-                    if not sub_dir_path.exists():
-                        sub_dir_path.mkdir(exist_ok=True)
-                    
-                    # Include class in filename only if we have class info
-                    if hasattr(dataset, 'n_classes') and dataset.n_classes > 0:
-                        filename = f"sample_{sample_id}_class{class_idx}_{generate_random_string(4)}.pt"
+
+                    # Determine output path based on class info
+                    if has_classes:
+                        out_path = output_dir / str(class_idx) / f"sample_{sample_id}_{generate_random_string(4)}.pt"
                     else:
-                        filename = f"sample_{sample_id}_{generate_random_string(4)}.pt"
-                        
-                    out_path = sub_dir_path / filename
-                    
-                    # Submit save task to thread pool
+                        sub_dir = f"{batch_idx % 100:02d}"
+                        sub_dir_path = output_dir / sub_dir
+                        sub_dir_path.mkdir(exist_ok=True)
+                        out_path = sub_dir_path / f"sample_{sample_id}_{generate_random_string(4)}.pt"
+
                     future = executor.submit(torch.save, encoding, out_path)
-                    future_to_filename[future] = out_path
-                
-                # Wait for all files in this batch to be saved and update storage
+                    future_to_path[future] = out_path
+                #if batch_idx % 10 == 0:
+                #    print(f"Batch {batch_idx}: Encountered class indices: {sorted(class_indices)}")
+
+                # Process completed saves and update storage count
                 batch_file_sizes = 0
-                for future in concurrent.futures.as_completed(future_to_filename):
-                    filename = future_to_filename[future]
+                for future in concurrent.futures.as_completed(future_to_path):
                     try:
-                        # Get result (None for torch.save) and file size
-                        future.result()  # This will raise exception if save failed
-                        batch_file_sizes += os.path.getsize(filename)
+                        future.result()
+                        batch_file_sizes += os.path.getsize(future_to_path[future])
                     except Exception as e:
-                        print(f"Error saving {filename}: {e}")
-                
-                # Update storage tracking
+                        print(f"Error saving {future_to_path[future]}: {e}")
+
                 with storage_lock:
                     current_storage += batch_file_sizes
-                
-                # Update progress
-                if batch_idx % 1 == 0:  # leave it at 1 for accurate timing estimates
+
+                # Update progress display
+                if batch_idx % 1 == 0:
                     storage_pct = int(current_storage * 100 / max_storage_bytes)
-                    pbar.set_description(
-                        f"Processing batches [{current_storage/1024**3:.2f}/{max_storage_bytes/1024**3:.1f} GB ({storage_pct}%)]"
-                    )
+                    pbar.set_description(f"Processing [{current_storage/1024**3:.2f}/{max_storage_bytes/1024**3:.1f} GB ({storage_pct}%)]")
                     pbar.update(1)
-                
-                # Force CUDA synchronization and garbage collection
+
+                # Clear GPU memory periodically
                 torch.cuda.synchronize()
-                if batch_idx % 50 == 0:  # Don't do this too often
-                    torch.cuda.empty_cache()
+                if batch_idx % 50 == 0: torch.cuda.empty_cache()
+
 
 
 handle_config_path()  # allow for full path in --config-name
