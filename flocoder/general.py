@@ -106,7 +106,7 @@ def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", c
     ckpt_path = f'{ckpt_dir}/{prefix}.pt' 
     save_dict = {'model_state_dict': model.state_dict()}
     if epoch is not None: 
-        ckpt_path.replace('.pt', f'_{epoch}.pt')
+        ckpt_path = ckpt_path.replace('.pt', f'_{epoch}.pt')
         save_dict['epoch'] = epoch
     if optimizer is not None:
         save_dict['optimizer_state_dict'] = optimizer.state_dict()
@@ -115,3 +115,5 @@ def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", c
     torch.save(save_dict, ckpt_path)
     print(f"Checkpoint saved to {ckpt_path}")
     return ckpt_path
+
+
