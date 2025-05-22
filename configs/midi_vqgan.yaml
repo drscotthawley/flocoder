@@ -1,10 +1,10 @@
 # @package _global_
 defaults:
-  - base
-  - midi
-  - vqgan
-  - flow
-  - preencoding
+  - common/base
+  - common/midi
+  - common/vqgan
+  - common/preencoding
+  - common/flow
   - _self_
 
 preencoding:

@@ -1,9 +1,9 @@
 # @package _global_
 defaults:
-  - base
-  - vqgan
-  - flow
-  - preencoding
+  - common/base
+  - common/vqgan
+  - common/preencoding
+  - common/flow
   - _self_
 
 # Dataset-specific config - if not present this gets downloaded

@@ -1,12 +1,12 @@
 # @package _global_
 defaults:
-  - base
-  - vqgan
-  - flow
-  - preencoding
+  - common/base
+  - common/vqgan
+  - common/flow
+  - common/preencoding
   - _self_
 
-# Dataset-specific config - if not present this gets downloaded
+# Dataset-specific config - common/if not present this gets downloaded
 data: "~/datasets/Oxford_Flowers102/images"
 
 # Override specific settings
