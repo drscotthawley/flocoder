@@ -308,7 +308,7 @@ def train_vqgan(config):
             wandb.log(log_dict)
 
         if (epoch + 1) % 250 == 0 and epoch > 0:
-            save_checkpoint(codec, epoch, optimizer=optimizer)
+            save_checkpoint(codec, epoch=epoch, optimizer=optimizer)
 
         if scheduler:
             scheduler.step()

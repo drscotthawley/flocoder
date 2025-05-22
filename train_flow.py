@@ -150,13 +150,13 @@ def train_flow(config):
             t = warp_time(t)          
 
             t_expand = t.view(-1, 1, 1, 1).repeat(1, batch.shape[1], batch.shape[2], batch.shape[3])
-            perturbed_data = t_expand * batch + (1 - t_expand) * source
+            x = t_expand * target + (1 - t_expand) * source
 
-            v_guess = target - source  #batch - z0
-            v_model = model(perturbed_data, t * 999, cond)
+            v_guess = target - source    # constant velocity
+            v_model = model(x, t * 999, cond)
             loss = loss_fn(v_model, v_guess)
         
-            if hasattr(model,'shrinker'):  # if multiresolution is available
+            if hasattr(model,'shrinker'):  # optional: if multiresolution UNet is available
                 lowres_v_guess = model.shrinker(v_guess)
                 lowres_loss = loss_fn(model.bottleneck_target_hook, lowres_v_guess) # compare with hook
                 loss = loss + lambda_lowres * lowres_loss
@@ -184,6 +184,7 @@ def train_flow(config):
             optimizer.step()
             ema.update()
 
+        # Evals / Metrics / Viz
         if (epoch < 10 and epoch % 1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): 
             # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
@@ -191,14 +192,15 @@ def train_flow(config):
             # batch, score, target = None, None, None  # TODO wth was this line ever for? 
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval_kwargs = {'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
-                    'latent_shape': latent_shape, 'batch_size': 100, 'target':target}
-            sampler(model, codec, epoch, "target_data", device, tag="", images=images, **eval_kwargs)
-            sampler(model, codec, epoch, "rk45", device, tag="", **eval_kwargs)
+            eval_kwargs = {'device':device, 'method':'rk45', 'use_wandb': use_wandb, 'output_dir': output_dir, 
+                           'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 100}
+            sampler(model, codec, epoch, tag="target_data", images=images, **eval_kwargs)
+            sampler(model, codec, epoch, tag="", target=target, target_labels=cond, **eval_kwargs) 
             ema.eval()
-            sampler(model, codec, epoch, "rk45", device, tag="ema_", **eval_kwargs)
+            sampler(model, codec, epoch, tag="ema_", **eval_kwargs)
             ema.train()
 
+        # Checkpoints
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
             save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flow_", ckpt_dir=f"checkpoints")
             ema.eval()  # Switch to EMA weights

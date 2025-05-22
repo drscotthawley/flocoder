@@ -111,14 +111,14 @@ def imshow(img, filename):
     pil_img.save(filename)
 
 
-def save_img_grid(img, epoch, method, nfe, tag="", use_wandb=True, output_dir="output"):
+def save_img_grid(img, epoch, nfe, tag="", use_wandb=True, output_dir="output"):
     """Save image grid with consistent 10-column layout to match class conditioning"""
-    filename = f"{method}_epoch_{epoch + 1}_nfe_{nfe}.png"
+    filename = f"{tag}_epoch_{epoch + 1}_nfe_{nfe}.png"
     # Use nrow=10 to ensure grid columns match our class conditioning
     img_grid = make_grid(img, nrow=10)
     file_path = os.path.join(output_dir, filename)
     imshow(img_grid, file_path)
-    name = f"demo/{tag}{method}"
+    name = f"demo/{tag}"
     if 'euler' in name: name = name + f"_nf{nfe}"
     if use_wandb: wandb.log({name: wandb.Image(file_path, caption=f"Epoch: {epoch}")})
 
