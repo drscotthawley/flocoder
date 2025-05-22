@@ -62,8 +62,8 @@ def train_flow(config):
     # Extract parameters from config
     data_path = f"{config.data}_encoded_{config.codec.choice}"
     batch_size = config.flow.batch_size
-    n_classes = config.model.n_classes
-    condition = config.model.condition
+    n_classes = config.unet.n_classes
+    condition = config.unet.condition
     lambda_lowres = config.flow.get('lambda_lowres', 0.1)
     learning_rate = config.flow.learning_rate
     epochs = config.flow.epochs

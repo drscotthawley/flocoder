@@ -19,7 +19,7 @@ import hydra
 from omegaconf import DictConfig
 from types import SimpleNamespace
 
-from flocoder.general import handle_config_path
+from flocoder.general import handle_config_path, ldcfg
 from flocoder.codecs import load_codec
 from flocoder.data import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
 from flocoder.data import create_image_loaders, midi_transforms, image_transforms
@@ -168,12 +168,12 @@ def main(config) -> None:
     
     # Get configuration values with defaults
     data_path = config.data
-    output_dir = f"{data_path}_encoded_{config.codec.choice}" if not config.get('output_dir') else config.output_dir
-    image_size = config.get('image_size', 128)
-    max_storage_gb = config.get('max_storage_gb', 50)
-    batch_size = config.get('batch_size', 32)
-    augs_per = config.get('augs_per', 512)
-    num_workers = config.get('num_workers', min(int(os.cpu_count() * 0.75), 64))
+    output_dir = f"{data_path}_encoded_{config.codec.choice}" if not ldcfg(config,'output_dir') else config.output_dir
+    image_size = ldcfg(config,'image_size', 128)
+    max_storage_gb = ldcfg(config,'max_storage_gb', 50, supply_defaults=True)
+    batch_size = ldcfg(config,'batch_size', 32)
+    augs_per = ldcfg(config,'augs_per', 512)
+    num_workers = ldcfg(config,'num_workers', min(int(os.cpu_count() * 0.75), 64))
     
     codec = load_codec(config, device)
     

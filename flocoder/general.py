@@ -30,6 +30,23 @@ def handle_config_path():
             break
 
 
+def ldcfg(config, key, default=None, supply_defaults=False, debug=True):
+    # little helper function: hydra/omegaconf is nice but also a giant pain.
+    # ithis gives precedence to anything in vqgan section, else falls back to main config, else default, else None
+    # re. supply_defaults: Hydra is tricksy enough that for some things you may just want execution to crash if config is misread
+    cfg_dict = config
+    if hasattr(config, 'to_container'):  # OmegaConf objects
+        cfg_dict = OmegaConf.to_container(config, resolve=True)
+    if 'preencoding' in cfg_dict and key in cfg_dict['preencoding']: 
+        return cfg_dict['preencoding'][key]
+    elif 'codec' in cfg_dict and key in cfg_dict['codec']: 
+        return cfg_dict['codec'][key]
+    elif key in cfg_dict: return cfg_dict[key]
+
+    if debug: print(f"Nope: couldn't find key {key} anywhere in config={cfg_dict}")
+    return default if supply_defaults else None
+
+
 def keep_recent_files(keep=5, directory='checkpoints', pattern='*.pt'):
     # delete all but the n most recent checkpoints/images (so the disk doesn't fill!)
     files = sorted(Path(directory).glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)

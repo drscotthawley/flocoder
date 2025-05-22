@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore", message="None of the inputs have requires_grad
 import os
 import math
 
+from .general import ldcfg
 
 # Optional: NATTEN
 # Execution is noticeably faster with NATTEN (at least on GPU)
@@ -576,53 +577,46 @@ class SD_VAE_Wrapper(nn.Module):
 
 
 
-def load_codec(cfg, device):
+def load_codec(config, device):
     """Load the appropriate codec model based on configuration."""
     import os
     import torch
     from types import SimpleNamespace
 
-    if cfg.codec.choice == "resize":
+    if config.codec.choice == "resize":
         print("Using SimpleResizeAE")
-        codec = SimpleResizeAE(latent_shape=cfg.codec.get('latent_shape', (4, 16, 16))).eval().to(device)
+        codec = SimpleResizeAE(latent_shape=config.codec.get('latent_shape', (4, 16, 16))).eval().to(device)
 
-    elif cfg.codec.choice == "sd":
+    elif config.codec.choice == "sd":
         print("Loading SD VAE via SD_VAE_Wrapper")
         codec = SD_VAE_Wrapper(
             pretrained_model_name="stabilityai/sd-vae-ft-mse"
         ).eval().to(device)
 
-        if hasattr(cfg, 'image_size') and cfg.image_size % 8 != 0:
-            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {cfg.image_size}")
+        if hasattr(config, 'image_size') and config.image_size % 8 != 0:
+            print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {config.image_size}")
     else:
         # Original VQVAE path
         # Get model parameters, handle nested config structures
-        if hasattr(cfg, 'model'):
-            mpars = SimpleNamespace(**dict(cfg.model))
-        elif hasattr(cfg, 'codec') and hasattr(cfg.codec, 'model'):
-            mpars = SimpleNamespace(**dict(cfg.codec.model))
-        else:
-            mpars = SimpleNamespace(**dict(cfg))
-
         # Create the VQVAE model
         codec = VQVAE(
             in_channels=3,
-            hidden_channels=getattr(mpars, 'hidden_channels', 256),
-            num_downsamples=getattr(mpars, 'num_downsamples', 3),
-            internal_dim=getattr(mpars, 'internal_dim', 256),
-            vq_embedding_dim=getattr(mpars, 'vq_embedding_dim', 4),
-            codebook_levels=getattr(mpars, 'codebook_levels', 4),
-            vq_num_embeddings=getattr(mpars, 'vq_num_embeddings', 512),
-            commitment_weight=getattr(mpars, 'commitment_weight', 0.5),
-            use_checkpoint=not cfg.get('no_grad_ckpt', False),
+            hidden_channels=ldcfg(config, 'hidden_channels', 256),
+            num_downsamples=ldcfg(config, 'num_downsamples', 3),
+            internal_dim=ldcfg(config, 'internal_dim', 256),
+            vq_embedding_dim=ldcfg(config, 'vq_embedding_dim', 4),
+            codebook_levels=ldcfg(config, 'codebook_levels', 4),
+            vq_num_embeddings=ldcfg(config, 'vq_num_embeddings', 512),
+            commitment_weight=ldcfg(config, 'commitment_weight', 0.5),
+            use_checkpoint=not config.get('no_grad_ckpt', False),
             no_natten=False,
         ).eval().to(device)
 
         # Figure out checkpoint path from different possible config structures
-        if hasattr(cfg, 'vqgan_checkpoint'):
-            checkpoint_path = cfg.vqgan_checkpoint
-        elif hasattr(cfg, 'codec') and hasattr(cfg.codec, 'checkpoint'):
-            checkpoint_path = cfg.codec.checkpoint
+        if hasattr(config, 'vqgan_checkpoint'):
+            checkpoint_path = config.vqgan_checkpoint
+        elif hasattr(config, 'codec') and hasattr(config.codec, 'checkpoint'):
+            checkpoint_path = config.codec.checkpoint
         else:
             raise ValueError("Could not find codec checkpoint path in config")
 

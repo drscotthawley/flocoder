@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - midi
+  - base
   - vqgan
   - flow
   - preencoding
@@ -9,19 +9,19 @@ defaults:
 # Dataset-specific config - if not present this gets downloaded
 data: "~/datasets/POP909_images"
 
+preencoding:
+  vqgan_checkpoint: "vqgan_best.pt"
+
 # Override specific settings
 codec:
-  choice: sd
-  #choice: vqgan 
-  vqgan:
-    commitment-weight: 0.6  # Higher for MIDI
-  training:
-    lambda_ce: 2.0  # Higher cross-entropy for MIDI
-  project_name: "flocoder-vqgan-midi"
+  choice: vqgan 
+  commitment-weight: 0.6  # Higher for MIDI
+  lambda_ce: 2.0  # Higher cross-entropy for MIDI
+  project_name: "fc-vqgan-midi"
 
 flow:
   batch_size: 256 
-  project_name: "flocoder-flow-midi"
+  project_name: "fc-flow-midi"
   unet:
     n_classes: 0
     condition: false

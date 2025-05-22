@@ -25,9 +25,12 @@ codec:
     lambda_ce: 0.0
     lambda_l1: 0.2
     lambda_mse: 0.5
-    lambda_perc: 5e-5
-    lambda_spec: 1e-3 
+    lambda_perc: 1e-3
+    lambda_spec: 5e-4 
     lambda_vq: 0.25 
 
     project_name: "flocoder-vqgan"
-# run_name: "best to set via CLI"
+    # run_name: "best to set via CLI"
+
+    checkpoint: "vqgan_best.pt"
+

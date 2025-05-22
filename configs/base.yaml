@@ -7,6 +7,7 @@ run_name: ~
 
 codec:
   choice: sd
+  checkpoint: "SD"
 
 preencoding: 
     # the encoder is the bottleneck, so for speed, don't make batch_size too big or use too many workers
@@ -15,7 +16,6 @@ preencoding:
     max_storage_gb: 50
     augs_per: 768
     #vqgan_checkpoint: "checkpoints/final_vqgan_flowers.pt"
-    vqgan_checkpoint: "SD"
 
 
 flow: 

@@ -25,7 +25,7 @@ from flocoder.data import create_image_loaders
 from flocoder.codecs import VQVAE, load_codec
 from flocoder.viz import viz_codebooks, denormalize
 from flocoder.metrics import *  # there's a lot
-from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path
+from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path, ldcfg
 
 
 class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
@@ -91,21 +91,6 @@ def train_vqgan(config):
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cuda' if torch.cuda.is_available() else 'cpu')
     print("device = ", device)
 
-
-    def ldcfg(key, default, supply_defaults=False, debug=True): 
-        # little helper function: hydra/omegaconf is nice but also a giant pain. 
-        # ithis gives precedence to anything in vqgan section, else falls back to main config, else default, else None
-        # re. supply_defaults: Hydra is tricksy enough that for some things you may just want execution to crash if config is misread
-        cfg_dict = config
-        if hasattr(config, 'to_container'):  # OmegaConf objects
-            cfg_dict = OmegaConf.to_container(config, resolve=True)
-        if 'codec' in cfg_dict and key in cfg_dict['codec']: return cfg_dict['codec'][key]
-        elif key in cfg_dict: return cfg_dict[key]
-
-        if debug: print(f"Nope: couldn't find key {key} anywhere in config={cfg_dict}")
-        return default if supply_defaults else None
-
-
     # Data setup - access config values with appropriate defaults
     is_midi = hasattr(config, 'data') and ('pop909' in config.data.lower() or 'midi' in config.data.lower())
     print("is_midi =",is_midi)
@@ -120,14 +105,14 @@ def train_vqgan(config):
     # Initialize model - either directly or using load_codec
     codec = VQVAE(
         in_channels=3,
-        hidden_channels   = ldcfg('hidden_channels', 256),
-        num_downsamples   = ldcfg('num_downsamples', 3),
-        vq_num_embeddings = ldcfg('vq_num_embeddings', 64),
-        internal_dim      = ldcfg('internal_dim', 128),
-        vq_embedding_dim  = ldcfg('vq_embedding_dim', 4),
-        codebook_levels   = ldcfg('codebook_levels', 4),
-        commitment_weight = ldcfg('commitment_weight', 0.25),
-        use_checkpoint    = not ldcfg('no_grad_ckpt', False),
+        hidden_channels   = ldcfg(config,'hidden_channels', 256),
+        num_downsamples   = ldcfg(config,'num_downsamples', 3),
+        vq_num_embeddings = ldcfg(config,'vq_num_embeddings', 64),
+        internal_dim      = ldcfg(config,'internal_dim', 128),
+        vq_embedding_dim  = ldcfg(config,'vq_embedding_dim', 4),
+        codebook_levels   = ldcfg(config,'codebook_levels', 4),
+        commitment_weight = ldcfg(config,'commitment_weight', 0.25),
+        use_checkpoint    = not ldcfg(config,'no_grad_ckpt', False),
     ).to(device)
 
     optimizer = optim.Adam(codec.parameters(), lr=config.get('learning_rate', 1e-4), weight_decay=1e-5)
@@ -155,16 +140,16 @@ def train_vqgan(config):
         print(f"No checkpoint specified (load_checkpoint=={load_checkpoint}). Starting from scratch")
 
     # Initialize wandb
-    no_wandb = ldcfg('no_wandb', False)
+    no_wandb = ldcfg(config,'no_wandb', False)
     if not no_wandb: # who loves a double negative?
-        project_name = ldcfg('project_name', "fc-vqgan")
-        run_name = ldcfg('run_name', None)
+        project_name = ldcfg(config,'project_name', "fc-vqgan")
+        run_name = ldcfg(config,'run_name', None)
         print("Got run name =",run_name)
         wandb.init(project=project_name, name=run_name, config=dict(config))
 
     # Training parameters
-    epochs = ldcfg('epochs', 1000000)
-    warmup_epochs = ldcfg('warmup_epochs', 15)
+    epochs = ldcfg(config,'epochs', 1000000)
+    warmup_epochs = ldcfg(config,'warmup_epochs', 15)
     
     # Main training loop
     for epoch in range(start_epoch, epochs):

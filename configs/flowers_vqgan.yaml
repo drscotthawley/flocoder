@@ -13,6 +13,8 @@ data: "~/datasets/Oxford_Flowers102/images"
 codec:
   choice: vqgan
   project_name: "fc-vqgan-flowers"
+  vqgan_checkpoint: "vqgan_best.pt"
 
 flow:
+  vqgan_checkpoint: "vqgan_best.pt"
   project_name: "fc-flow-flowers"
