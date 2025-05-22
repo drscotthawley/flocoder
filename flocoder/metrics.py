@@ -73,6 +73,7 @@ def pwrspec(y, eps=1e-8):
 
 def spectral_loss(x, x_recon):
     x_spec, x_recon_spec = pwrspec(x), pwrspec(x_recon)
+    # TODO: maybe flatten the spectrum or just grab high freqs; MSE already emphasizes the lows
     if torch.is_autocast_enabled(): 
         x_spec = x_spec.to(torch.half)
         x_recon_spec = x_recon_spec.to(torch.half) 
