@@ -1,3 +1,4 @@
+# @package _global_
 # Oxford flowers dataset If it's not present, then it will be downloaded & set up
 data: "~/datasets/Oxford_Flowers102/images"
 image_size: 128
@@ -8,30 +9,4 @@ run_name: ~
 codec:
   choice: sd
   checkpoint: "SD"
-
-preencoding: 
-    # the encoder is the bottleneck, so for speed, don't make batch_size too big or use too many workers
-    batch_size: 32
-    num_workers: 8
-    max_storage_gb: 50
-    augs_per: 768
-    #vqgan_checkpoint: "checkpoints/final_vqgan_flowers.pt"
-
-
-flow: 
-    # Parameters specific to flow model
-    # note: any encoding/decoding/visualization will likely read from the VQGAN section above
-    batch_size: 2048
-    learning_rate: 2e-4
-    epochs: 10000
-    project_name: "flocoder-flow-flowers"
-    # run_name: "best to set via CLI"
-    unet: 
-        num_layers: 8
-        num_blocks: 4
-        num_heads: 8
-        num_channels: 256
-        num_residuals: 2
-        n_classes: 102
-        condition: true
 

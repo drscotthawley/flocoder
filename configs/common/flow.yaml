@@ -1,4 +1,7 @@
-unet: 
+# @package _global_
+flow: 
+    # unet parameters
+    epochs: 10000
     num_layers: 8
     num_blocks: 4
     num_heads: 8

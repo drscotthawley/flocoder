@@ -37,13 +37,15 @@ def ldcfg(config, key, default=None, supply_defaults=False, debug=True):
     cfg_dict = config
     if hasattr(config, 'to_container'):  # OmegaConf objects
         cfg_dict = OmegaConf.to_container(config, resolve=True)
-    if 'preencoding' in cfg_dict and key in cfg_dict['preencoding']: 
+    if 'flow' in cfg_dict and key in cfg_dict['flow']:   # the order of cases is important here 
+        return cfg_dict['flow'][key]
+    elif 'preencoding' in cfg_dict and key in cfg_dict['preencoding']: 
         return cfg_dict['preencoding'][key]
     elif 'codec' in cfg_dict and key in cfg_dict['codec']: 
         return cfg_dict['codec'][key]
     elif key in cfg_dict: return cfg_dict[key]
 
-    if debug: print(f"Nope: couldn't find key {key} anywhere in config={cfg_dict}")
+    if debug: print(f"\n**** NOPE: couldn't find key {key} anywhere in config={cfg_dict}")
     return default if supply_defaults else None
 
 

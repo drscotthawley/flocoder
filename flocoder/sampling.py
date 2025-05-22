@@ -1,6 +1,8 @@
 import torch
 from scipy import integrate  # This is CPU-only
 from .viz import imshow, save_img_grid
+from .metrics import sinkhorn_loss, fid_score
+
 
 def to_flattened_numpy(x):
     return x.detach().cpu().numpy().reshape((-1,))
@@ -61,7 +63,10 @@ def rk45_sampler(model, shape, device, eps=0.001, n_classes=0, cfg_scale=3.0):
 
 @torch.no_grad()
 def sampler(model, codec, epoch, method, device, sample_N=None, batch_size=100, tag="", 
-         images=None, use_wandb=True, output_dir="output", n_classes=0, latent_shape=(4,16,16)):
+         images=None, use_wandb=True, output_dir="output", n_classes=0, 
+         latent_shape=(4,16,16),
+         target=None,  # target is in latent space, not pixel space
+         ):
     """Evaluate model by generating samples with class conditioning"""
     model.eval()
     # Use a batch size that's a multiple of 10 to ensure proper grid layout
@@ -69,7 +74,7 @@ def sampler(model, codec, epoch, method, device, sample_N=None, batch_size=100, 
     batch_size=100 # hard code this for the image display; ignore other batch size values
     shape = (batch_size,)+latent_shape
 
-    if images is None:
+    if images is None: # TODO: rename, somehow, "images" may actually be latents
         if method == "euler":
             images, nfe = euler_sampler(model, shape=shape, sample_N=sample_N, device=device, n_classes=n_classes)
         elif method == "rk45":
@@ -81,6 +86,23 @@ def sampler(model, codec, epoch, method, device, sample_N=None, batch_size=100, 
         
     save_img_grid(images.cpu(), epoch, method, nfe, tag=tag, use_wandb=use_wandb, output_dir=output_dir)
     save_img_grid(decoded_images.cpu(), epoch, method, nfe, tag=tag+"decoded_", use_wandb=use_wandb, output_dir=output_dir)
+
+    # metrics on generated outputs:
+    if target is not None:
+        wandb_log_dict = {}
+        sinkhorn = sinkhorn_loss(target[:batch_size], images, device=device)
+        #fid = 0.0 # fid_score(target[:batch_size], images) # fid assumes 3 channels, which latents typically won't have
+        if vae.is_sd:
+            with torch.no_grad():
+                decoded_targ = vae.decode(target.to(device)).sample
+        sinkhorn_px = sinkhorn_loss(decoded_targ[:batch_size], decoded_images, device=device)  # pixel space
+        fid_px = fid_score(decoded_targ[:batch_size], decoded_images)  # pixel space
+        if use_wandb:
+            wandb_log_dict = wandb_log_dict | {'epoch':epoch, 'metrics/sinkhorn': sinkhorn}  #, 'metrics/FID': fid }
+            wandb_log_dict = wandb_log_dict | {'metrics/sinkhorn_px': sinkhorn_px, 'metrics/FID_px': fid_px }
+            wandb.log(wandb_log_dict)
+
+
     return model.train()
 
 

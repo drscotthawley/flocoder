@@ -21,8 +21,7 @@ from PIL import Image
 from pathlib import Path
 
 # use my utils and such 
-from flocoder.training.losses import sinkhorn_loss
-from flocoder.eval.metrics import fid_score
+from flocoder.metrics import sinkhorn_loss, fid_score
 from flocoder.data.datasets import PreEncodedDataset
 
 

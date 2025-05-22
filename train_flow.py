@@ -13,7 +13,7 @@ import hydra
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset
-from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path
+from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg
 from flocoder.sampling import sampler, warp_time
 
 
@@ -61,15 +61,15 @@ class EMA:
 def train_flow(config):
     # Extract parameters from config
     data_path = f"{config.data}_encoded_{config.codec.choice}"
-    batch_size = config.flow.batch_size
-    n_classes = config.unet.n_classes
-    condition = config.unet.condition
-    lambda_lowres = config.flow.get('lambda_lowres', 0.1)
-    learning_rate = config.flow.learning_rate
-    epochs = config.flow.epochs
-    project_name = config.project_name
-    run_name = config.get('run_name', None)
-    no_wandb = config.get('no_wandb', False)
+    batch_size = ldcfg(config,'batch_size')
+    n_classes = ldcfg(config,'n_classes')
+    condition = ldcfg(config,'condition')
+    learning_rate = ldcfg(config,'learning_rate')
+    epochs = ldcfg(config,'epochs')
+    project_name = ldcfg(config,'project_name')
+    run_name = ldcfg(config, 'run_name')
+    no_wandb = ldcfg(config,'no_wandb', False)
+    lambda_lowres = config.flow.get('lambda_lowres', 0.1) # might not have it
     
     print(f"data_path = {data_path}")
 
@@ -192,7 +192,7 @@ def train_flow(config):
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
             eval_kwargs = {'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
-               'latent_shape': latent_shape, 'batch_size': 100}
+                    'latent_shape': latent_shape, 'batch_size': 100, 'target':target}
             sampler(model, codec, epoch, "target_data", device, tag="", images=images, **eval_kwargs)
             sampler(model, codec, epoch, "rk45", device, tag="", **eval_kwargs)
             ema.eval()

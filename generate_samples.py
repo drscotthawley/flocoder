@@ -10,7 +10,7 @@ from omegaconf import OmegaConf, DictConfig
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec
 from flocoder.sampling import sampler, rk45_sampler
-from flocoder.general import handle_config_path
+from flocoder.general import handle_config_path, ldcfg
 from flocoder.viz import save_img_grid, imshow
 
 
@@ -33,8 +33,8 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     H = W = 16  # Default downsampled size
     
     # Use condition and n_classes from config
-    n_classes = config.unet.get('n_classes', 0)
-    condition = config.flow.unet.get('condition', False)
+    n_classes = ldcfg(config, 'n_classes', 0)
+    condition = ldcfg(config, 'condition', False)
     
     print(f"Creating unet with: channels={C}, dim={H}, condition={condition}, n_classes={n_classes}")
     
@@ -75,29 +75,26 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     unet.eval()
     
     # Load codec based on config choice - similar to how it's done in train_flow.py
-    if hasattr(config, 'codec') and hasattr(config.codec, 'choice'):
-        codec_choice = config.codec.choice
-        print(f"Using codec: {codec_choice}")
-    else:
-        codec_choice = "vqgan"  # Default
-        print(f"No codec choice found in config. Using default: {codec_choice}")
-    
+    codec_choice = ldcfg(config, 'codec_choice')
+    print(f"Using codec: {codec_choice}")
+
     # Load the codec
     codec = load_codec(config, device)  # This function handles the codec choice internally
     
     # For sampling, we need to know the latent shape
+    image_size = ldcfg(config,'image_size', 128)
     if codec_choice == "sd":
         # SD VAE uses 4x downsampling with 4 channels
-        latent_shape = (4, config.get('image_size', 128) // 8, config.get('image_size', 128) // 8)
+        latent_shape = (4, image_size//8, image_size//8)
     elif codec_choice == "resize":
         # Resize codec preserves channel count and just scales dimensions
         latent_shape = (3, config.get('image_size', 32), config.get('image_size', 32))
-    else:  # vqgan
+    elif code_choice == 'vqgan': 
         # VQGAN typically does 2^num_downsamples reduction with internal_dim channels
-        ds_factor = 2 ** config.get('num_downsamples', 3)
-        latent_shape = (config.unet.get('vq_embedding_dim', 4), 
-                       config.get('image_size', 128) // ds_factor, 
-                       config.get('image_size', 128) // ds_factor)
+        ds_factor = 2 ** ldcfg(config, 'num_downsamples', 3)
+        latent_shape = (ldcfg(config,'vq_embedding_dim', 4)), image_size//ds_factor, image_size//ds_factor)
+    else: 
+        raise ValueError(f"Invalid codec_choice = {codec_choice}") 
     
     print(f"Using latent shape: {latent_shape}")
     
@@ -163,7 +160,7 @@ def main(config: DictConfig) -> None:
     """Entry point for the sample generation script."""
     print(f"Config: {OmegaConf.to_yaml(config)}")
     
-    # Extract parameters from the config
+    # Extract parameters from the config - these will likely just yield the defaults
     unet_path = config.get("unet_path", "flow_99")
     n_samples = config.get("n_samples", 100)
     method = config.get("method", "rk45")
