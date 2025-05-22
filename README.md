@@ -138,7 +138,7 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 - [x] Replace Class in `preencode_data.py` with functions as per Style Guide 
 - [x] Research: Figure out why conditioning fails for latent model
 - [x] Add Standalone sampler script / Gradio demo?
-- [ ] Add metrics (to wandb out) to quantify training progress (sinkhorn, FID)
+- [x] Add metrics (to wandb out) to quantify flow training progress (sinkhorn, FID)
 - [ ] Add Contributor Guidelines
 - [ ] Add Documentation
 - [ ] Improve overall introduction/orientation

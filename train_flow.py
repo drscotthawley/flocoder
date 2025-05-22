@@ -188,7 +188,7 @@ def train_flow(config):
             # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
             images = batch[:100].cpu()
-            batch, score, target = None, None, None
+            # batch, score, target = None, None, None  # TODO wth was this line ever for? 
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
             eval_kwargs = {'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
