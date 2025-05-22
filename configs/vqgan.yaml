@@ -6,7 +6,8 @@ codec:
     internal_dim: 128
     vq_embedding_dim: 4
     codebook_levels: 4
-    vq_num_embeddings: 64
+    #vq_num_embeddings: 64
+    vq_num_embeddings: 96
     commitment_weight: 0.5
     no_grad_ckpt: False 
 
