@@ -17,4 +17,4 @@ codec:
   image_size: 32
   latent_shape: [3,32,32]
 
-project_name: "fc-flow-resize-flowers"
+project_name: "fc-flow-flowers-resize"

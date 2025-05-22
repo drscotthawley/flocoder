@@ -17,4 +17,4 @@ codec:
 
 flow:
   vqgan_checkpoint: "vqgan_best.pt"
-  project_name: "fc-flow-flowers"
+  project_name: "fc-flow-flowers-vqgan"

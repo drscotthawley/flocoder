@@ -1,5 +1,6 @@
 # @package _global_
 flow: 
+    batch_size: 256
     # unet parameters
     epochs: 10000
     num_layers: 8

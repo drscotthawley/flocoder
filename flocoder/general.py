@@ -1,6 +1,8 @@
 import os 
 import torch 
 from pathlib import Path
+import warnings
+
 
 
 def handle_config_path():
@@ -30,23 +32,28 @@ def handle_config_path():
             break
 
 
-def ldcfg(config, key, default=None, supply_defaults=False, debug=True):
+def ldcfg(config, key, default=None, supply_defaults=False, debug=True, verbose=True):
     # little helper function: hydra/omegaconf is nice but also a giant pain.
     # ithis gives precedence to anything in vqgan section, else falls back to main config, else default, else None
     # re. supply_defaults: Hydra is tricksy enough that for some things you may just want execution to crash if config is misread
     cfg_dict = config
+    answer = None
     if hasattr(config, 'to_container'):  # OmegaConf objects
         cfg_dict = OmegaConf.to_container(config, resolve=True)
     if 'flow' in cfg_dict and key in cfg_dict['flow']:   # the order of cases is important here 
-        return cfg_dict['flow'][key]
+        answer =  cfg_dict['flow'][key]
     elif 'preencoding' in cfg_dict and key in cfg_dict['preencoding']: 
-        return cfg_dict['preencoding'][key]
+        answer = cfg_dict['preencoding'][key]
     elif 'codec' in cfg_dict and key in cfg_dict['codec']: 
         return cfg_dict['codec'][key]
-    elif key in cfg_dict: return cfg_dict[key]
+    elif key in cfg_dict: 
+        answer = cfg_dict[key]
+    else:
+        warnings.warn(f"couldn't find key {key} anywhere in config={cfg_dict}")
+        answer = default if supply_defaults else None
 
-    if debug: print(f"\n**** NOPE: couldn't find key {key} anywhere in config={cfg_dict}")
-    return default if supply_defaults else None
+    if verbose: print(f'lcfg: {key} := {answer}')
+    return answer
 
 
 def keep_recent_files(keep=5, directory='checkpoints', pattern='*.pt'):
