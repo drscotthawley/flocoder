@@ -1,13 +1,11 @@
 # @package _global_
 defaults:
   - base
+  - midi
   - vqgan
   - flow
   - preencoding
   - _self_
-
-# Dataset-specific config - if not present this gets downloaded
-data: "~/datasets/POP909_images"
 
 preencoding:
   vqgan_checkpoint: "vqgan_best.pt"
