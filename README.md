@@ -127,7 +127,8 @@ This generates new samples by sampling from the flow model and decoding through 
 
 # Contributing
 
-Contributions are welcome!  Still getting this properly "set up" to welcome more people. (We'll have Contribitors Guidelines eventually.) For now, if you think something needs doing, it probably does!  Please review the [Style Guide](StyleGuide.md) and submit a Pull Request!  
+Contributions are VERY welcome!  See [Contributing.md](Contributing.md). Thanks in advance. 
+
 
 # TODO
 
@@ -139,7 +140,7 @@ Contributions are welcome!  Still getting this properly "set up" to welcome more
 - [x] Research: Figure out why conditioning fails for latent model
 - [x] Add Standalone sampler script / Gradio demo?
 - [x] Add metrics (to wandb out) to quantify flow training progress (sinkhorn, FID)
-- [ ] Add Contributor Guidelines
+- [x] Add Contributing guidelines
 - [ ] Add Documentation
 - [ ] Improve overall introduction/orientation
 - [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc.
