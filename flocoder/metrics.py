@@ -26,8 +26,8 @@ def sinkhorn_loss(target, gen, max_B=128, device='cuda'):
 
 
 
-def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, 3, H, W] tensor of predicted probabilities 
-                                 target,                # target: [B, 3, H, W] tensor of ground truth RGB where:
+def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, C, H, W] tensor of predicted probabilities 
+                                 target,                # target: [B, C, H, W] tensor of ground truth RGB where:
                                                             # - black = [0,0,0] (background)
                                                             # - red = [1,0,0] (onset)
                                                             # - green = [0,1,0] (sustain)
@@ -37,13 +37,20 @@ def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, 3, H, W] ten
                                  eps=1e-8,              # Small value to avoid log(0)
                                  debug=False):
     """    Compute cross entropy loss for RGB piano roll images with thresholding    """
+    if debug: print(f"pred.shape = {pred.shape}, target.shape = {target.shape}")
     #targets & preds may have imagenet norm (if dataloader norm'd them) so before doing BCE loss we need to un-norm them
-    target_unnorm = target
+    target_unnorm = target  #...? did i forget to do something here?
     
-    # Different thresholds for each color (background, onset, sustain) channel
     thresholds = torch.tensor([onset_threshold, sustain_threshold, 1.0])[None,:,None,None].to(target.device)
+
+    if target.shape[1] == 1:  # Grayscale case
+        thresholds = torch.tensor([sustain_threshold])[None,:,None,None].to(target.device)
+    else:  # RGB case: Different thresholds for each color (background, onset, sustain) channel
+        thresholds = torch.tensor([onset_threshold, sustain_threshold, 1.0])[None,:,None,None].to(target.device)
+
     target_binary = torch.where(target_unnorm > thresholds, torch.ones_like(target), torch.zeros_like(target))
     pred = pred / temperature # Scale logits by temperature
+    if debug: print(f"pred.shape = {pred.shape}, target_binary.shape = {target_binary.shape}")
     loss = F.binary_cross_entropy_with_logits(pred, target_binary)
     return loss.mean() # Sum across channels and average over batch and spatial dimensions
 
@@ -130,11 +137,11 @@ def hinge_d_loss(real_pred, fake_pred):
 
 
 class AdversarialLoss(nn.Module):
-    def __init__(self, device, use_checkpoint=False):
+    def __init__(self, device, in_channels=3, use_checkpoint=False):
         super().__init__()
 
         self.device = device
-        self.discriminator = PatchDiscriminator(use_checkpoint=use_checkpoint).to(device)
+        self.discriminator = PatchDiscriminator(in_channels=in_channels, use_checkpoint=use_checkpoint).to(device)
         self.criterion = hinge_d_loss
 
         self.register_buffer('real_label', torch.ones(1))
@@ -203,10 +210,13 @@ def rgb2g(img_t):
    green = (img_t[-2] > 0.5).float() * 0.5  # 0.5 for green
    return (red + green).unsqueeze(-3)
 
-def g2rgb(gf_img): # gf = greyscale float
-   """Convert grayscale back to RGB: 0->BLACK, 1.0->RED, 0.5->GREEN"""
-   if gf_img.shape[-3] == 3: return gf_img 
+def g2rgb(gf_img, keep_gray=False): # gf = greyscale floatw
+   """Convert grayscale back to RGB: 0->BLACK, 1.0->RED, 0.5->GREEN, unless keep_gray is on in which case it becomes"""
+   if gf_img.shape[-3] == 3: return gf_img
    gf = gf_img.squeeze(-3)
+   if keep_gray: 
+        binary_img = (gf > 0.5).float()  # or whatever threshold
+        return binary_img.unsqueeze(-3).repeat(1, 3, 1, 1)
    return torch.stack([(gf >= 0.75).float(), (torch.abs(gf - 0.5) < 0.25).float(), torch.zeros_like(gf)], dim=-3)
 
 
@@ -242,10 +252,10 @@ def analyze_positions(p_mask, t_mask, limit=10):
         print(f"   {pos}")
 
 
-def calculate_note_metrics(pred, target, threshold=0.4, minval=None, maxval=None, debug=False):
-    if debug: print(f"Before:  pred.shape = {pred.shape}, target.shape = {target.shape}")
-    pred, target = g2rgb(pred), g2rgb(target)
-    if debug: print(f"After:  pred.shape = {pred.shape}, target.shape = {target.shape}")
+def calc_note_metrics(pred, target, threshold=0.4, minval=None, maxval=None, keep_gray=False, debug=False):
+    if debug: print(f"calc_note_metrics: Before:  pred.shape = {pred.shape}, target.shape = {target.shape}")
+    pred, target = g2rgb(pred, keep_gray=keep_gray), g2rgb(target, keep_gray=keep_gray)
+    if debug: print(f"calc_note_metrics: After:  pred.shape = {pred.shape}, target.shape = {target.shape}")
     if minval is None:  minval = target.min()
     if maxval is None:  maxval = target.max()
     pred_clamped = torch.clamp(pred.clone(), minval, maxval)

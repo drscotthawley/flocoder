@@ -42,26 +42,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     unet_cls = Unet #if config.get('use_mrunet', False) else Unet
     print(f"Setting up unet class: {unet_cls}")
 
-    # for reference:
-    # class Unet(nn.Module):
-    # def __init__(
-    #     self,
-    #     dim,
-    #     dim_mults=(1, 2, 4, 8),
-    #     channels=3,
-    #     resnet_block_groups=4,
-    #     condition=False,
-    #     n_classes=10,
-    #     use_checkpoint=False,
-    # ):
-    #unet = unet_cls(dim=H, channels=C, condition=condition, n_classes=n_classes).to(device)
-    unet = Unet(
-        dim=H,
-        channels=C,
-        dim_mults=(1, 2, 4),
-        condition=condition,
-        n_classes=n_classes,
-    ).to(device)
+    unet = Unet( dim=H, channels=C, dim_mults=(1, 2, 4), condition=condition, n_classes=n_classes,).to(device)
     
     print(f"Loading unet checkpoint from {unet_path}")
     try:

@@ -12,6 +12,7 @@ from functools import partial
 from tqdm import tqdm
 
 from .pianoroll import midi_to_pr_img
+from .general import ldcfg
 
 # general utility
 def fast_scandir(
@@ -68,12 +69,20 @@ class RandomRoll:
         return f"RandomRoll(max_h_shift={self.max_h_shift}, max_v_shift={self.max_v_shift}, p={self.p})"
 
 
-def midi_transforms(image_size=128, random_roll=True):
+class MyRGBToGrayscale:
+    """Sum RGB channels equally (no luminance weighting)"""
+    def __call__(self, tensor):
+        # Equal weighting: red and green of same intensity → same grayscale value
+        grayscale = tensor.sum(dim=0, keepdim=True).clamp(0, 1.0)
+        return grayscale
+
+def midi_transforms(image_size=128, random_roll=True, grayscale=False):
     """Standard image transformations for training and validation."""
     transform_list = [
         RandomRoll() if random_roll else None,
         transforms.RandomCrop(image_size),
         transforms.ToTensor()]
+    if grayscale: transform_list.append(MyRGBToGrayscale())
     return transforms.Compose([t for t in transform_list if t is not None])
 
 
@@ -178,8 +187,9 @@ class MIDIImageDataset(ImageListDataset):
                  val_ratio=0.1,  # percentage for validation
                  seed=42,        # for reproducibility 
                  skip_versions=True, # if true, it will skip the extra versions of the same song
-                 total_only=True, # if true, it will only keep the "_TOTAL_" version of each song
-                 download=True, # if true, it will download the datase -- leave this on for now
+                 total_only=True,    # if true, it will only keep the "_TOTAL_" version of each song
+                 download=True,      # if true, it will download the datase -- leave this on for now
+                 config=None,        # additional config info (starting to get too many kwargs!)
                  debug=False):
         
         if download: datasets.utils.download_and_extract_archive(url, download_root=root)
@@ -212,13 +222,16 @@ class MIDIImageDataset(ImageListDataset):
             self.midi_img_file_list = [f for f in self.midi_img_file_list if '_TOTAL' in f]
         if debug: print(f"len(midi_img_file_list): {len(self.midi_img_file_list)}")
 
+        self.add_onsets = ldcfg(config,'add_onsets', True)
+        self.grayscale = ldcfg(config,'in_channels', 3) == 1
+
         super().__init__(self.midi_img_file_list, transform=transform, 
                          split=split, val_ratio=val_ratio, seed=seed, debug=debug)
  
     def convert_one(self, midi_file, debug=True):
         if debug: print(f"Converting {midi_file} to image")
         midi_to_pr_img(midi_file, self.midi_img_dir, show_chords=False, all_chords=None, 
-                          chord_names=None, filter_mp=True, add_onsets=True,
+                          chord_names=None, filter_mp=True, add_onsets=self.add_onsets,
                           remove_leading_silence=True)
 
     def convert_all(self):
@@ -330,6 +343,7 @@ class PreEncodedDataset(Dataset):
 
 
 class ColorAwareDataset(Dataset):
+    # NOTE: This doesn't help and could/should be deleted
     """Used only for VQGAN & Oxford Flowers: This is a quickie hack I made. 
     Oxford Flowers is low in blue and high in red, 
     so this is an attempt to balance out the data distribution for training.
@@ -374,12 +388,16 @@ class ColorAwareDataset(Dataset):
 ### Dataloaders
 
 def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_path=None, 
-                         is_midi=False, num_workers=8, val_ratio=0.1, debug=True):
+                         is_midi=False, num_workers=8, val_ratio=0.1, 
+                         config=None, # more options to pass
+                         debug=True):
     
     # define transforms
     if is_midi: # midi piano roll images
-        train_transforms = midi_transforms(image_size)
-        val_transforms = midi_transforms(image_size, random_roll=False)
+        grayscale = ldcfg(config,'in_channels', 3) == 1
+        if debug: print(f"\n--setting grayscale = {grayscale}\n")
+        train_transforms = midi_transforms(image_size, grayscale=grayscale)
+        val_transforms = midi_transforms(image_size, random_roll=False, grayscale=grayscale)
     else: # for regular images, e.g. from Oxford Flowers dataset
         train_transforms = image_transforms(image_size)
         val_transforms = image_transforms(image_size)
@@ -394,8 +412,8 @@ def create_image_loaders(batch_size=32, image_size=128, shuffle_val=True, data_p
         train_base = datasets.Food101(root=data_path, split='train', transform=train_transforms, download=True)
         val_base = datasets.Food101(root=data_path, split='test', transform=val_transforms, download=True)
     elif is_midi:
-        train_base = MIDIImageDataset(split='train', transform=train_transforms, download=True, val_ratio=val_ratio)
-        val_base = MIDIImageDataset(split='val', transform=val_transforms, download=True, val_ratio=val_ratio)
+        train_base = MIDIImageDataset(split='train', transform=train_transforms, download=True, val_ratio=val_ratio, config=config)
+        val_base = MIDIImageDataset(split='val', transform=val_transforms, download=True, val_ratio=val_ratio, config=config)
     else:
         # Custom directory handling, e.g. for custom datasets,...
         _, all_files = fast_scandir(data_path, ['jpg', 'jpeg', 'png'])

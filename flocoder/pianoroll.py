@@ -97,8 +97,6 @@ def piano_roll_to_pretty_midi(piano_roll, fs=8, program=0):
 
 
 
-#### beginning of code copied from midi2img.py
-
 def find_first_note_start(midi):
     """find the start time of the first note in the midi file
        used to help alignment to beats/bars
@@ -111,7 +109,11 @@ def find_first_note_start(midi):
     return first_start
 
 
-def get_piano_rolls(midi, fs, remove_leading_silence=True, add_onsets=True, debug=False):
+def get_piano_rolls(midi, 
+        fs, 
+        remove_leading_silence=True, 
+        add_onsets=True, 
+        debug=False):
     """Converts a pretty_midi object to a piano roll for each instrument"""
     duration = midi.get_end_time()   # find out duration of the midi file
     n_frames = int(np.ceil(duration * fs))   # calculate the number of frames
@@ -154,7 +156,11 @@ def get_piano_rolls(midi, fs, remove_leading_silence=True, add_onsets=True, debu
 
 def piano_roll_to_img(pr_frame, # this is an array of shape (128, n_frames)
                       output_dir, midi_name, instrument, 
-                      start_col=None, add_onsets=True, chords=None, chord_names=False, debug=False,
+                      start_col=None, 
+                      add_onsets=True, 
+                      chords=None, 
+                      chord_names=False, 
+                      debug=False,
                       onset_style=ONSET_STYLE, # 'start' or 'early'
                       ):
     os.makedirs(f"{output_dir}/{midi_name}", exist_ok=True)
@@ -170,7 +176,7 @@ def piano_roll_to_img(pr_frame, # this is an array of shape (128, n_frames)
     rgb_image = np.dstack((np.zeros_like(green_channel), green_channel, np.zeros_like(green_channel)))
     img = Image.fromarray(rgb_image,'RGB')
 
-    if add_onsets:        # add little onset markers (red dots)
+    if add_onsets:        # add little onset markers (red dots). if false, onsets stay green
         if onset_style=='early':
             # any black pixel that has a green pixel to its right is an onset. color it red
             # note that x any are flipped from what you'd think, e.g. "img.size =  (2352, 128)"

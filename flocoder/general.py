@@ -35,12 +35,14 @@ def handle_config_path():
 def ldcfg(config, key, default=None, supply_defaults=False, debug=True, verbose=True):
     # little helper function: hydra/omegaconf is nice but also a giant pain.
     # ithis gives precedence to anything in vqgan section, else falls back to main config, else default, else None
-    # re. supply_defaults: Hydra is tricksy enough that for some things you may just want execution to crash if config is misread
+    # re. supply_defaults: Hydra is tricky enough that for some things you may want execution to crash if config is misread
     cfg_dict = config
     answer = None
     if hasattr(config, 'to_container'):  # OmegaConf objects
         cfg_dict = OmegaConf.to_container(config, resolve=True)
-    if 'flow' in cfg_dict and key in cfg_dict['flow']:   # the order of cases is important here 
+
+    # the order of cases is important here 
+    if 'flow' in cfg_dict and cfg_dict['flow'] is not None and key in cfg_dict['flow']:
         answer =  cfg_dict['flow'][key]
     elif 'preencoding' in cfg_dict and key in cfg_dict['preencoding']: 
         answer = cfg_dict['preencoding'][key]

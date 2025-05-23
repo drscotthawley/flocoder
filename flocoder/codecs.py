@@ -31,13 +31,23 @@ except ImportError:
 
 
 
+def gn_groups(proposed, channels, max_groups=8, verbose=True):
+    """Lil utility so that when you change input channels, GroupNorm doens't bring everything to a halt"""
+    if channels % proposed == 0: return proposed # we're good.
+    for candidate in range(proposed, channels): # if there's a mismatch Find nearest divisor >= proposed
+        if channels % candidate == 0:
+            if verbose: print(f"gn_groups: rounded proposed={proposed} up to {candidate} for channels={channels}")
+            return candidate
+
+    if verbose: print(f"gn_groups: no valid divisor found for proposed={proposed}, channels={channels}, falling back to LayerNorm behavior")
+    return 1
+
+
 class Normalize(nn.Module):
     def __init__(self, num_channels, num_groups=32, eps=1e-6, affine=True):
         super().__init__()
-        self.norm = nn.GroupNorm(num_groups=num_groups, 
-                                num_channels=num_channels, 
-                                eps=eps, 
-                                affine=affine)
+        num_groups = gn_groups(num_groups, num_channels)
+        self.norm = nn.GroupNorm(num_groups=num_groups, num_channels=num_channels, eps=eps, affine=affine)
     def forward(self, x):
         return self.norm(x)
     
@@ -89,7 +99,7 @@ class NATTENBlock(nn.Module):
         self.scaling = (self.head_dim ** -0.5) * 0.5
         
         # Replace LayerNorm with GroupNorm
-        self.norm = nn.GroupNorm(num_groups=8, num_channels=dim)
+        self.norm = nn.GroupNorm(num_groups=gn_groups(8,dim), num_channels=dim)
         self.qkv = nn.Linear(dim, dim * 3, bias=False)
         self.proj = nn.Linear(dim, dim, bias=False)
         self.gamma = nn.Parameter(torch.zeros(1))
@@ -136,10 +146,10 @@ class EncDecResidualBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, use_checkpoint=False, attention='natten', dropout_rate=0.1, dropout2d_rate=None):
         super().__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
-        self.norm1 = nn.GroupNorm(8, out_channels)
+        self.norm1 = nn.GroupNorm(gn_groups(8,out_channels), out_channels)
         self.silu = nn.SiLU()
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
-        self.norm2 = nn.GroupNorm(8, out_channels)
+        self.norm2 = nn.GroupNorm(gn_groups(8,out_channels), out_channels)
         self.dropout = nn.Dropout(dropout_rate)
         if dropout2d_rate is None: dropout2d_rate = max(0.05, dropout_rate-0.05)
         self.dropout2d = nn.Dropout2d(dropout2d_rate)
@@ -148,7 +158,7 @@ class EncDecResidualBlock(nn.Module):
         if stride != 1 or in_channels != out_channels:
             self.downsample = nn.Sequential(
                 nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
-                nn.GroupNorm(8, out_channels)
+                nn.GroupNorm(gn_groups(8, out_channels), out_channels)
             )
 
         self.use_checkpoint = use_checkpoint
@@ -228,7 +238,7 @@ class Decoder(nn.Module):
         next_layers = [
             SpatialNonLocalAttention(vq_embedding_dim),
             nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand to internal_dim
-            nn.GroupNorm(vq_embedding_dim, internal_dim),
+            nn.GroupNorm(gn_groups(vq_embedding_dim, internal_dim), internal_dim),
             nn.SiLU(),
             nn.Conv2d(internal_dim, current_channels, 1),  # Then to current_channels
             NoiseInjection(current_channels, noise_strength=0.01), # try to inject a little generative "information"
@@ -390,7 +400,7 @@ class VQVAE(nn.Module):
         # added this extra set of compression layers
         compress_layers = [
             nn.Conv2d(internal_dim, vq_embedding_dim, 1),  # Compress to 8 dimensions
-            nn.GroupNorm(2, vq_embedding_dim),
+            nn.GroupNorm(gn_groups(2, vq_embedding_dim), vq_embedding_dim),
             nn.SiLU(),
             nn.Conv2d(vq_embedding_dim, vq_embedding_dim, 3, padding=1)]
         encoder_layers.extend(compress_layers)
@@ -425,16 +435,7 @@ class VQVAE(nn.Module):
 
         print("vq_embedding_dim, internal_dim = ",vq_embedding_dim, internal_dim)
         
-        # self.expand = nn.Sequential(
-        #     nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand back to original dimension
-        #     nn.GroupNorm(vq_embedding_dim, internal_dim),
-        #     nn.SiLU(),
-        # )
         uncompress_layers = []
-        #    nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand back to original dimension
-        #    nn.GroupNorm(vq_embedding_dim, internal_dim),
-        #    nn.SiLU(),
-        #]
         self.decoder = Decoder( in_channels=in_channels,
             hidden_channels=hidden_channels,
             num_downsamples=num_downsamples,

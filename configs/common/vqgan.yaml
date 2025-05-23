@@ -2,6 +2,7 @@
 # vqgan architecture
 codec:
     choice: "vqgan"
+    in_channels: 3
     hidden_channels: 256
     num_downsamples: 3
     internal_dim: 128
@@ -10,7 +11,7 @@ codec:
     #vq_num_embeddings: 64
     vq_num_embeddings: 96
     commitment_weight: 0.5
-    no_grad_ckpt: False 
+    no_grad_ckpt: false 
 
     # vqgan training
     batch_size: 64
@@ -29,6 +30,8 @@ codec:
     lambda_perc: 1e-3
     lambda_spec: 5e-4 
     lambda_vq: 0.25 
+    # only for midi_data:
+    add_onsets: true
 
     project_name: "flocoder-vqgan"
     # run_name: "best to set via CLI"
