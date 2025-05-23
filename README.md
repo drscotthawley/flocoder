@@ -141,11 +141,16 @@ Discussions are open!  Rather than starting some ad-hoc Discord server, let's sh
 - [x] Add Standalone sampler script / Gradio demo?
 - [x] Add metrics (to wandb out) to quantify flow training progress (sinkhorn, FID)
 - [x] Add Contributing guidelines
+- [ ] Make RK4(5) integrator fully CUDA-compatible
+- [ ] Straighter paths:  Add Reflow, Minibatch OT, Ray's Rays, Curvature penalty,...
+- [ ] Add jitter / diffusion for comparison 
 - [ ] Add Documentation
 - [ ] Improve overall introduction/orientation
 - [ ] Fix "code smell" throughout -- repeated methods, hard-coded values, etc.
-- [ ] Research: Figure out how to accelerate training of flows
+- [ ] Research: Figure out how to accelerate training of flows!!
 - [ ] Research: Figure out how to accelerate training of vqgan
+- [ ] Research: improve output quality of midi-flow (and midi-vqgan)
+- [ ] Inference speedup: investigate model quantization / pruning (pytorch.ao?) 
 - [ ] Ops: Add tests
 - [ ] Ops: Add CI
       
