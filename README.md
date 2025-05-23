@@ -114,7 +114,7 @@ Takes about 20 minutes to run on a single GPU.
 
 The flow model operates in the latent space created by the autoencoder.
 
-### Generating Samples -- TODO: this is not implemented yet! 
+### Generating Samples
 
 ```bash
 # Generate new MIDI samples
