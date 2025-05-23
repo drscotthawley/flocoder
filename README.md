@@ -126,6 +126,9 @@ This generates new samples by sampling from the flow model and decoding through 
 
 Contributions are VERY welcome!  See [Contributing.md](Contributing.md). Thanks in advance. 
 
+# Discussions
+
+Discussions are open!  Rather than starting some ad-hoc Discord server, let's share ideas, questions, insights, etc. using the Discussions tab. 
 
 # TODO
 
