@@ -11,6 +11,9 @@ from tqdm.auto import tqdm
 import hydra
 from omegaconf import OmegaConf
 
+from natten import use_fused_na
+use_fused_na()
+
 
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec

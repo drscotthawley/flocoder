@@ -578,7 +578,7 @@ class SD_VAE_Wrapper(nn.Module):
 
 
 
-def load_codec(config, device):
+def load_codec(config, device, no_natten=False):
     """Load the appropriate codec model based on configuration."""
     import os
     import torch
@@ -610,7 +610,7 @@ def load_codec(config, device):
             vq_num_embeddings=ldcfg(config, 'vq_num_embeddings', 512),
             commitment_weight=ldcfg(config, 'commitment_weight', 0.5),
             use_checkpoint=not config.get('no_grad_ckpt', False),
-            no_natten=False,
+            no_natten=no_natten,
         ).eval().to(device)
 
         # Figure out checkpoint path from different possible config structures

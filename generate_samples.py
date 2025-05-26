@@ -3,6 +3,16 @@
 import os, sys, random, torch, gc
 from pathlib import Path
 import re
+import torch
+import time
+
+import natten
+from natten import has_half
+print(f"Natten version {natten.__version__}, checking half precision:")
+print(has_half())  # Default torch cuda device
+print(has_half(0)) # cuda:0
+from natten import use_fused_na
+use_fused_na()
 
 import hydra
 from omegaconf import OmegaConf, DictConfig
@@ -19,14 +29,15 @@ _codec = None
 _unet = None
 _config = None
 
-def load_models_once(unet_path, config):
+@torch.no_grad()
+def load_models_once(unet_path, config, device=None, use_half=False):
     """Load models only if not already loaded or path changed"""
     global _codec, _unet, _config
     
     if _codec is None or _unet is None or _config != config:
         print("Loading models...")
         _config = config
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device is None: device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Load codec
         _codec = load_codec(config, device).eval()
@@ -52,12 +63,19 @@ def load_models_once(unet_path, config):
         _unet = unet.eval()
     else:
         print("load_models_once: we've already loaded. Skipping.")
-        
-    return _codec, _unet
+
+    if not use_half: return _codec, _unet
+
+    for param in _codec.parameters():
+        param.data = param.data.half()
+    for buffer in _codec.buffers():
+        buffer.data = buffer.data.half()
+    return _codec.half(),  _unet
 
 
 @torch.no_grad() # eval only 
-def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_strength=3.0, device=None, method="rk45", save_latents=False):
+def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_strength=3.0, 
+        device=None, method="rk45", n_steps=10, save_latents=False):
     """Generate samples from a trained unet. Returns paths to generated images."""
     device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
     
@@ -71,7 +89,8 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     codec_choice = ldcfg(config.codec, 'choice')
     print(f"Using codec: {codec_choice}")
 
-    codec, unet = load_models_once(unet_path, config)
+    codec, unet = load_models_once(unet_path, config, device=device)
+    codec, unet = codec.to(device), unet.to(device)
 
     # For sampling, we need to know the latent shape
     image_size = ldcfg(config,'image_size', 128)
@@ -100,18 +119,26 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
         print("batch_size, samples_left, curr_batch_size, curr_shape =",batch_size, samples_left, curr_batch_size, curr_shape)
         
         # Generate samples with selected method
-        print(f"calling sampler with method = {method}, curr_shape = {curr_shape}")
+        start_time = time.time()
+        print(f"\n====> HERE WE GO: Calling sampler with method = {method}, curr_shape = {curr_shape}")
         if method == "rk45": 
             images, nfe = rk45_sampler(unet, curr_shape, device, cond=None)
         else: 
             # Use existing sampler function for other methods
-            n_steps = 50 
             images = sampler(unet, codec, 0, method, device, n_steps=n_steps, batch_size=curr_batch_size, 
                           n_classes=0, latent_shape=latent_shape, cfg_strength=cfg_strength, use_wandb=False,
                           return_images=True)
             nfe = n_steps 
-        
-        decoded_images = codec.decode(images.to(device))  # Decode to real images
+        mid_time = time.time() 
+        print(f"\n<======  BACK FROM FLOW SAMPLER in {mid_time-start_time} seconds")
+        print("CALLING DECODER... ====>")
+        mid_time2 = time.time() 
+        dtype = next(codec.parameters()).dtype
+        decoded_images = codec.decode(images.to(dtype).to(device))  # Decode to real images
+        end_time = time.time()
+        print(f"<======== BACK FROM DECODER in {end_time-mid_time2} seconds.")
+        print(f"Total time for flow+decode: {end_time - start_time:.2f} seconds")
+        print("Pushing to the web interface.")
         tag = f"batch_{len(all_filenames)}_"  # Tag for filenames
         
         # Save latents if requested
@@ -159,17 +186,17 @@ handle_config_path()  # allow for full path in --config-name
 def main(config: DictConfig) -> None:
     """Entry point for the sample generation script."""
     print(f"Config: {OmegaConf.to_yaml(config)}")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Extract parameters from the config - these will likely just yield the defaults
     unet_path = config.get("unet_path", "flow_99")
     n_samples = config.get("n_samples", 100)
-    method = config.get("method", "rk45")
+    method = config.get("method", "rk4")
     output_dir = config.get("output_dir", None)
-    device = config.get("device", None)
     save_latents = config.get("save_latents", False) 
     use_gradio = config.get("use_gradio", False)
 
-    codec, unet = load_models_once(unet_path, config)
+    codec, unet = load_models_once(unet_path, config, device=device)
     
     # Handle gradio interface if requested
     if use_gradio:
@@ -184,12 +211,14 @@ def main(config: DictConfig) -> None:
                     unet_input = gr.Textbox(value=unet_path, label="unet Path")
                     samples_input = gr.Slider(minimum=1, maximum=n_samples, value=n_samples, step=1, label="Samples")
                     cfg_input = gr.Slider(minimum=-3, maximum=15.0, value=3.0, step=0.1, label="CFG Strength")
-                    method_input = gr.Radio(choices=["rk45","rk4"], value=method, label="Method")
+                    method_input = gr.Radio(choices=["rk4","rk45"], value=method, label="Method")
+                    steps_input = gr.Slider(minimum=1, maximum=100, value=10, step=1, label="Steps")
+                    device_input = gr.Radio(choices=["cuda","cpu"], value="cuda", label="Device")
                     generate_btn = gr.Button("Generate")
                 
                 output_gallery = gr.Gallery()
             
-            def show_samples(unet_path_ui, n_samples_ui, cfg_strength_ui, method_ui):
+            def show_samples(unet_path_ui, n_samples_ui, cfg_strength_ui, method_ui, steps_ui, device_ui):
                 # This function receives inputs from the Gradio UI and calls the main generate_samples function
                 # 'config' is available in this scope from the main function
                 print(f"show_samples: Generating samples with: unet_path={unet_path_ui}, n_samples={n_samples_ui}, cfg_strength={cfg_strength_ui}, method={method_ui}")
@@ -198,6 +227,8 @@ def main(config: DictConfig) -> None:
                     config=config, # Pass the original config object
                     n_samples=int(n_samples_ui),
                     method=method_ui,
+                    n_steps=steps_ui,
+                    device=device_ui,
                     cfg_strength=cfg_strength_ui, # Pass the CFG strength from the UI
                     output_dir=None # Ensure output_dir is passed, though None triggers default
                 )
@@ -205,7 +236,7 @@ def main(config: DictConfig) -> None:
                 print(f"Generated {len(files)} files, retuning only {n_samples_ui} images")
                 return files[:int(n_samples_ui)]
             
-            generate_btn.click(show_samples, [unet_input, samples_input, cfg_input, method_input], output_gallery)
+            generate_btn.click(show_samples, [unet_input, samples_input, cfg_input, method_input, steps_input, device_input], output_gallery)
         
         app.launch(share=False)  # Launch the app
     else:

@@ -22,7 +22,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
         device = time.device
         half_dim = self.dim // 2
         embeddings = math.log(10000) / (half_dim - 1)
-        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        embeddings = torch.exp(torch.arange(half_dim, device=device, dtype=time.dtype) * -embeddings)
         embeddings = time[:, None] * embeddings[None, :]
         embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
         return embeddings
@@ -260,7 +260,7 @@ class Unet(nn.Module):
     def _forward(self, x, time, cond=None):
         x = self.init_conv(x)
         r = x.clone()
-
+        dtype = next(self.time_mlp.parameters()).dtype
         t = self.time_mlp(time)
         if self.condition and cond is not None:
             t += self.cond_mlp(cond)

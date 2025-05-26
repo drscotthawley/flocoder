@@ -21,6 +21,9 @@ from tqdm.auto import tqdm
 import hydra
 from omegaconf import DictConfig, OmegaConf, open_dict
 
+from natten import use_fused_na
+use_fused_na()
+
 from flocoder.data import create_image_loaders
 from flocoder.codecs import VQVAE, load_codec
 from flocoder.viz import viz_codebooks, denormalize

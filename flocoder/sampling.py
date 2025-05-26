@@ -39,7 +39,9 @@ def rk4_step(f, # function that takes (y,t) and returns dy/dt, i.e. velocity
 
 @torch.no_grad()
 def v_func_cfg(model, cond, cfg_strength, x, t):
-    t_vec = torch.full((x.shape[0],), t, device=x.device)
+    device = next(model.parameters()).device 
+    dtype = next(model.parameters()).dtype 
+    t_vec = torch.full((x.shape[0],), t, device=x.device, dtype=x.dtype)
     v = model(x, t_vec * 999, cond)
     if cond is not None and cfg_strength is not None and cfg_strength != 0:
         v_uncond = model(x, t_vec * 999, None)
@@ -48,12 +50,13 @@ def v_func_cfg(model, cond, cfg_strength, x, t):
 
 @torch.no_grad()
 def integrate_path(model, shape, step_fn=rk4_step, n_steps=50,
-                   save_trajectories=False, warp_fn=warp_time, cond=None, cfg_strength=3.0):
+                   save_trajectories=False, warp_fn=warp_time, cond=None, cfg_strength=3.0,):
     """this 'sampling' routine is primarily used for visualization."""
     device = next(model.parameters()).device 
-    initial_points = torch.randn(shape).to(device)
+    dtype = next(model.parameters()).dtype 
+    initial_points = torch.randn(shape, device=device, dtype=dtype)
     current_points = initial_points.clone()
-    ts =  torch.linspace(0,1,n_steps).to(device)
+    ts =  torch.linspace(0,1,n_steps, device=device, dtype=dtype)
     if warp_fn: ts = warp_fn(ts)
     if save_trajectories: trajectories = [current_points]    
     v_func = partial(v_func_cfg, model, cond, cfg_strength)
