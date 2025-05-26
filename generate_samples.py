@@ -261,7 +261,7 @@ def create_gradio_interface(config,  # config object for interface
             
             with gr.Column():
                 output_gallery = gr.Gallery()
-                midi_players = [gr.HTML(label=f"MIDI Player {i+1}") for i in range(4)]
+                midi_players = gr.HTML(label=f"MIDI Players")
         
         def show_samples(unet_path_ui, n_samples_ui, cfg_strength_ui, method_ui, steps_ui):
             # nested function called by gradio button clicker, below
@@ -301,10 +301,8 @@ def create_gradio_interface(config,  # config object for interface
 
 
             # Convert images to MIDI and create player HTML
-            midi_htmls = []
+            all_midi_html = ''
             for i, img_file in enumerate(result_images):
-                if i >= 4:  # Only create MIDI for first 4 samples
-                    break
                 try:
                     # Convert image to rectangular format if needed (for MIDI conversion)
                     img = Image.open(img_file)
@@ -319,22 +317,18 @@ def create_gradio_interface(config,  # config object for interface
                     # Create MIDI player HTML
                     srcdoc = MIDIPlayer(midi_file, 300, styler=dark).html
                     srcdoc = srcdoc.replace("\"", "'")
-                    html = f'''<iframe srcdoc="{srcdoc}" height="300" width="100%" title="MIDI Player {i+1}"></iframe>'''
-                    midi_htmls.append(html)
+                    html = f'''<h3>Sample {i+1}</h3><iframe srcdoc="{srcdoc}" height="300" width="100%" title="MIDI Player {i+1}"></iframe><br>'''
+                    all_midi_html += html
                 except Exception as e:
                     print(f"Error creating MIDI for {img_file}: {e}")
-                    midi_htmls.append(f"<p>Error creating MIDI player for sample {i+1}</p>")
-            
-            # Pad with empty HTML if we have fewer than 4 samples
-            while len(midi_htmls) < 4:
-                midi_htmls.append("")
-            
+                    all_midi_html += f"<p>Error creating MIDI player for sample {i+1}</p><br>"
+       
             print(f"Generated {len(result_images)} files for gradio display")
-            return result_images, *midi_htmls
+            return result_images, all_midi_html
         
         generate_btn.click(show_samples, 
                           [unet_input, samples_input, cfg_input, method_input, steps_input], 
-                          [output_gallery]+midi_players)
+                          [output_gallery,midi_players])
     
     return app
 
