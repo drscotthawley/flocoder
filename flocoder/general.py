@@ -2,6 +2,7 @@ import os
 import torch 
 from pathlib import Path
 import warnings
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 
 
 
@@ -102,7 +103,7 @@ def load_model_checkpoint(model, checkpoint, frozen_only=False):
 
 
 
-def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", ckpt_dir='checkpoints'):
+def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", ckpt_dir='checkpoints', config=None):
 
     keep_recent_files(keep=keep, directory=ckpt_dir, pattern=f'{prefix}*.pt')
  
@@ -113,6 +114,8 @@ def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", c
         save_dict['epoch'] = epoch
     if optimizer is not None:
         save_dict['optimizer_state_dict'] = optimizer.state_dict()
+    if config is not None:  # store config used to make this model
+        save_dict['config'] = config
         
     os.makedirs(ckpt_dir, exist_ok=True)
     torch.save(save_dict, ckpt_path)

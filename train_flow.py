@@ -201,9 +201,9 @@ def train_flow(config):
 
         # Checkpoints
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
-            save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flow_", ckpt_dir=f"checkpoints")
+            save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flow_", ckpt_dir=f"checkpoints", config=config)
             ema.eval()  # Switch to EMA weights
-            save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flowema_", ckpt_dir=f"checkpoints")
+            save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flowema_", ckpt_dir=f"checkpoints", config=config)
             ema.train()  # Switch back to regular weights
             keep_recent_files(100, directory=output_dir, pattern="*.png") # not too many image outputs
 

@@ -33,7 +33,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     H = W = 16  # Default downsampled size
     
     # Use condition and n_classes from config
-    n_classes = ldcfg(config, 'n_classes', 0)
+    n_classes = ldcfg(config, 'n_classes', 0, supply_defaults=True)
     condition = ldcfg(config, 'condition', False)
     
     print(f"Creating unet with: channels={C}, dim={H}, condition={condition}, n_classes={n_classes}")
@@ -73,7 +73,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     elif code_choice == 'vqgan': 
         # VQGAN typically does 2^num_downsamples reduction with internal_dim channels
         ds_factor = 2 ** ldcfg(config, 'num_downsamples', 3)
-        latent_shape = (ldcfg(config,'vq_embedding_dim', 4)), image_size//ds_factor, image_size//ds_factor)
+        latent_shape = (ldcfg(config,'vq_embedding_dim', 4), image_size//ds_factor, image_size//ds_factor)
     else: 
         raise ValueError(f"Invalid codec_choice = {codec_choice}") 
     
