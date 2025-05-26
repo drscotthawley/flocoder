@@ -118,6 +118,8 @@ def sampler(model, codec, epoch,
             is_midi=False, 
             keep_gray=False,
             cfg_strength=3.0,
+            n_steps=50,
+            return_images=False,
             ):
     # TODO: clean up:  through many quick additions, this whole thing has become janky AF
     """Evaluate model by generating samples with class conditioning"""
@@ -148,7 +150,8 @@ def sampler(model, codec, epoch,
         elif method == "rk45":
             images, nfe = rk45_sampler(model, shape=shape, device=device, cond=cond)
         else:
-            images, nfe = integrate_path(model, shape=shape, cond=cond, cfg_strength=cfg_strength)
+            images, nfe = integrate_path(model, n_steps=n_steps, shape=shape, cond=cond, cfg_strength=cfg_strength)
+    if return_images: return images
 
     save_img_grid(images.cpu(), epoch, nfe, tag=tag, use_wandb=use_wandb, output_dir=output_dir)
     decoded_images = codec.decode(images.to(device))

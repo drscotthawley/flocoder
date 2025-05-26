@@ -62,7 +62,9 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
     
     if output_dir is None: output_dir = f"output_{Path(unet_path).stem}"  # Set default output directory
+    print(f"1 output_dir = {output_dir}")
     os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
+    os.makedirs("output", exist_ok=True)  # Ensure output directory exists
     
     if not unet_path.endswith(".pt"): unet_path = f"checkpoints/{unet_path}.pt"  # Handle checkpoint path
     # Load codec based on config choice - similar to how it's done in train_flow.py
@@ -89,22 +91,25 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     print(f"Using latent shape: {latent_shape}")
     
     
-    batch_size = 10 if n_samples < 10 else 100  # sampler expects multiples of 10
+    batch_size =  10 if n_samples < 10 else 100  # sampler expects multiples of 10
     all_filenames, samples_left = [], max(n_samples, 10)
     
     while samples_left > 0:
         curr_batch_size = min(batch_size, samples_left)
         curr_shape = (curr_batch_size, *latent_shape)
+        print("batch_size, samples_left, curr_batch_size, curr_shape =",batch_size, samples_left, curr_batch_size, curr_shape)
         
         # Generate samples with selected method
-        print(f"calling sampler with curr_shape = {curr_shape}")
+        print(f"calling sampler with method = {method}, curr_shape = {curr_shape}")
         if method == "rk45": 
             images, nfe = rk45_sampler(unet, curr_shape, device, cond=None)
         else: 
             # Use existing sampler function for other methods
-            images = sampler(unet, codec, 0, method, device, batch_size=curr_batch_size, 
-                          n_classes=n_classes, latent_shape=latent_shape, cfg_strength=cfg_strength)
-            nfe = 100  # Default NFE value for non-RK45 methods
+            n_steps = 50 
+            images = sampler(unet, codec, 0, method, device, n_steps=n_steps, batch_size=curr_batch_size, 
+                          n_classes=0, latent_shape=latent_shape, cfg_strength=cfg_strength, use_wandb=False,
+                          return_images=True)
+            nfe = n_steps 
         
         decoded_images = codec.decode(images.to(device))  # Decode to real images
         tag = f"batch_{len(all_filenames)}_"  # Tag for filenames
@@ -129,6 +134,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
         # Save individual decoded images
         for i in range(min(len(decoded_images), 100)):
             img_filename = os.path.join(output_dir, f"{tag}{method}_epoch_1_nfe_{nfe}_{i:03d}.png")
+            #print(f"i = {i}, saving file {img_filename}")
             img = decoded_images.cpu()[i]
             if img.shape[0] == 1: img = g2rgb(img, keep_gray=True)[0]
             imshow(img, img_filename)
@@ -162,6 +168,8 @@ def main(config: DictConfig) -> None:
     device = config.get("device", None)
     save_latents = config.get("save_latents", False) 
     use_gradio = config.get("use_gradio", False)
+
+    codec, unet = load_models_once(unet_path, config)
     
     # Handle gradio interface if requested
     if use_gradio:
@@ -176,7 +184,7 @@ def main(config: DictConfig) -> None:
                     unet_input = gr.Textbox(value=unet_path, label="unet Path")
                     samples_input = gr.Slider(minimum=1, maximum=n_samples, value=n_samples, step=1, label="Samples")
                     cfg_input = gr.Slider(minimum=-3, maximum=15.0, value=3.0, step=0.1, label="CFG Strength")
-                    method_input = gr.Radio(choices=["rk45"], value=method, label="Method")
+                    method_input = gr.Radio(choices=["rk45","rk4"], value=method, label="Method")
                     generate_btn = gr.Button("Generate")
                 
                 output_gallery = gr.Gallery()
