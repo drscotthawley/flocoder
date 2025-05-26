@@ -13,6 +13,47 @@ from flocoder.sampling import sampler, rk45_sampler
 from flocoder.general import handle_config_path, ldcfg
 from flocoder.viz import save_img_grid, imshow
 
+# module-level globals
+_codec = None
+_unet = None
+_config = None
+
+def load_models_once(unet_path, config):
+    """Load models only if not already loaded or path changed"""
+    global _codec, _unet, _config
+    
+    if _codec is None or _unet is None or _config != config:
+        print("Loading models...")
+        _config = config
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Load codec
+        _codec = load_codec(config, device).eval()
+        
+        # Load unet
+        checkpoint = torch.load(unet_path, map_location=device)
+        state_dict = checkpoint['model_state_dict']
+        init_conv = state_dict['init_conv.weight']
+        C = init_conv.shape[1]  # Input channels from checkpoint
+        H = W = 16  # Default downsampled size
+        n_classes = ldcfg(config, 'n_classes', 0, supply_defaults=True)
+        condition = ldcfg(config, 'condition', False)
+        dim_mults = ldcfg(config, 'dim_mults', [1,2,4,4])
+        unet = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
+        try:
+            # First try loading with strict=False to allow parameter mismatches
+            unet.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            print("Loaded checkpoint with non-strict parameter matching")
+        except Exception as e:
+            print(f"Error loading unet: {e}")
+            raise RuntimeError("Failed to load unet checkpoint")
+    
+        _unet = unet.eval()
+    else:
+        print("load_models_once: we've already loaded. Skipping.")
+        
+    return _codec, _unet
+
 
 @torch.no_grad() # eval only 
 def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_strength=3.0, device=None, method="rk45", save_latents=False):
@@ -23,46 +64,12 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
     
     if not unet_path.endswith(".pt"): unet_path = f"checkpoints/{unet_path}.pt"  # Handle checkpoint path
-    checkpoint = torch.load(unet_path, map_location=device)  # Load checkpoint
-
-    # Determine unet architecture from checkpoint
-    # Get dimensions that match the checkpoint
-    state_dict = checkpoint['model_state_dict']
-    init_conv = state_dict['init_conv.weight']
-    C = init_conv.shape[1]  # Input channels from checkpoint
-    H = W = 16  # Default downsampled size
-    
-    # Process config
-    n_classes = ldcfg(config, 'n_classes', 0, supply_defaults=True)
-    condition = ldcfg(config, 'condition', False)
-    dim_mults = ldcfg(config, 'dim_mults', [1,2,4,4])
-    
-    print(f"Creating unet with: channels={C}, dim={H}, condition={condition}, n_classes={n_classes}")
-    
-    # Create unet with parameters matching the checkpoint
-    unet_cls = Unet #if config.get('use_mrunet', False) else Unet
-    print(f"Setting up unet class: {unet_cls}")
-
-    unet = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
-    
-    print(f"Loading unet checkpoint from {unet_path}")
-    try:
-        # First try loading with strict=False to allow parameter mismatches
-        unet.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        print("Loaded checkpoint with non-strict parameter matching")
-    except Exception as e:
-        print(f"Error loading unet: {e}")
-        raise RuntimeError("Failed to load unet checkpoint")
-        
-    unet.eval()
-    
     # Load codec based on config choice - similar to how it's done in train_flow.py
     codec_choice = ldcfg(config.codec, 'choice')
     print(f"Using codec: {codec_choice}")
 
-    # Load the codec
-    codec = load_codec(config, device)  # This function handles the codec choice internally
-    
+    codec, unet = load_models_once(unet_path, config)
+
     # For sampling, we need to know the latent shape
     image_size = ldcfg(config,'image_size', 128)
     if codec_choice == "sd":
