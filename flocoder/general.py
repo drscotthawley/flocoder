@@ -1,8 +1,9 @@
 import os 
 import torch 
 from pathlib import Path
-import warnings
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from omegaconf import OmegaConf
+
 
 
 
@@ -53,7 +54,7 @@ def ldcfg(config, key, default=None, supply_defaults=False, debug=False, verbose
     elif key in cfg_dict: 
         answer = cfg_dict[key]
     else:
-        warnings.warn(f"couldn't find key {key} anywhere in config={cfg_dict}")
+        if verbose: print(f"ldcfg: Warning: couldn't find key '{key}' in config keys: {list(cfg_dict.keys())}")
         answer = default if supply_defaults else None
 
     if verbose: print(f'lcfg: {key} := {answer}')

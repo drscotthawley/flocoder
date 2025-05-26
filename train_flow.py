@@ -231,7 +231,7 @@ def train_flow(config):
 handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
 def main(config):
-    OmegaConf.set_struct(config, False)  # make it mutable
+    OmegaConf.set_struct(config, False)  # make config mutable
     print("Config:", config)     
     train_flow(config)
 

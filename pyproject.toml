@@ -41,6 +41,7 @@ dev = [
     "jupyter>=1.0.0",
     "hydra-colorlog>=1.2.0",  
     "gradio>=4.0.0",
+    "midi-player",
 ]
 
 [tool.hatch.build.targets.wheel]

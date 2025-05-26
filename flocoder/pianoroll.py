@@ -444,6 +444,9 @@ def filter_redgreen(img:Image,
             elif is_green(r,g,b, thresh) and (not require_onsets):
                 img2.putpixel((x,y), (r,g,b)) # keep the note
                 note_on = True 
+            elif (not require_onsets) and (r > thresh and g > thresh and b > thresh):  # white pixels
+                img2.putpixel((x,y), (0,g,0))  # convert white to green for MIDI processing
+                note_on = True
             else:
                 note_on = False
                 img2.putpixel((x,y), (0,0,0))  # zero it out
@@ -466,6 +469,8 @@ def img2midi_multi(img, require_onsets=True, separators=512, debug=False):
     red_arr = np.array(img.split()[0])
     green_arr = np.array(img.split()[1])
     combined_arr = red_arr + green_arr
+    max_val = max(red_arr.max(), green_arr.max())
+    combined_arr = np.clip(combined_arr, 0, max_val)
     if debug: arr_check(img, '1')
     img = Image.fromarray(combined_arr, mode="L")
     if debug: arr_check(img, '2')
