@@ -9,6 +9,7 @@ from omegaconf import OmegaConf, DictConfig
 
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec
+from flocoder.metrics import g2rgb 
 from flocoder.sampling import sampler, rk45_sampler
 from flocoder.general import handle_config_path, ldcfg
 from flocoder.viz import save_img_grid, imshow
@@ -116,7 +117,9 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
             # Save individual latent images
             for i in range(min(len(images), 100)):
                 img_filename = os.path.join(output_dir, f"{tag}latent_{method}_epoch_1_nfe_{nfe}_{i:03d}.png")
-                imshow(images.cpu()[i], img_filename)
+                img = images.cpu()[i]
+                if img.shape[0] == 1: img = g2rgb(img, keep_gray=True)
+                imshow(img, img_filename)
                 latent_files.append(img_filename)
         
         # Save decoded images
@@ -126,7 +129,9 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
         # Save individual decoded images
         for i in range(min(len(decoded_images), 100)):
             img_filename = os.path.join(output_dir, f"{tag}{method}_epoch_1_nfe_{nfe}_{i:03d}.png")
-            imshow(decoded_images.cpu()[i], img_filename)
+            img = decoded_images.cpu()[i]
+            if img.shape[0] == 1: img = g2rgb(img, keep_gray=True)[0]
+            imshow(img, img_filename)
             decoded_files.append(img_filename)
         
         all_filenames.extend(decoded_files)
