@@ -12,7 +12,7 @@ preencoding:
 
 # Override specific settings
 codec:
-  choice: vqgan 
+  choice: "vqgan"
   learning_rate: 5.0e-5
   commitment-weight: 0.6  # Higher for MIDI
   lambda_ce: 2.5  # Higher cross-entropy for MIDI

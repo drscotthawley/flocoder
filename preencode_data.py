@@ -154,6 +154,7 @@ handle_config_path()  # allow for full path in --config-name
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
 def main(config) -> None:
     """Main entry point using Hydra."""
+    OmegaConf.set_struct(config, False)  # make it mutable
     # Debug - print the config structure
     print("Config keys:", list(config.keys()))
     print("Full config:", config)

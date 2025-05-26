@@ -9,6 +9,8 @@ from torch.utils.data import DataLoader
 import wandb
 from tqdm.auto import tqdm
 import hydra
+from omegaconf import OmegaConf
+
 
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec
@@ -226,6 +228,7 @@ def train_flow(config):
 handle_config_path()
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers")
 def main(config):
+    OmegaConf.set_struct(config, False)  # make it mutable
     print("Config:", config)     
     train_flow(config)
 

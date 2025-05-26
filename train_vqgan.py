@@ -325,6 +325,8 @@ handle_config_path() # Process any direct config file paths before hydra
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
 def main(config):
     """Main entry point using Hydra."""
+    OmegaConf.set_struct(config, False)  # make it mutable
+
     # Set torch options for better performance
     torch.cuda.empty_cache()
     torch.backends.cudnn.benchmark = True

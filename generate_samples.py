@@ -32,9 +32,10 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     C = init_conv.shape[1]  # Input channels from checkpoint
     H = W = 16  # Default downsampled size
     
-    # Use condition and n_classes from config
+    # Process config
     n_classes = ldcfg(config, 'n_classes', 0, supply_defaults=True)
     condition = ldcfg(config, 'condition', False)
+    dim_mults = ldcfg(config, 'dim_mults', [1,2,4,4])
     
     print(f"Creating unet with: channels={C}, dim={H}, condition={condition}, n_classes={n_classes}")
     
@@ -42,7 +43,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     unet_cls = Unet #if config.get('use_mrunet', False) else Unet
     print(f"Setting up unet class: {unet_cls}")
 
-    unet = Unet( dim=H, channels=C, dim_mults=(1, 2, 4), condition=condition, n_classes=n_classes,).to(device)
+    unet = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
     
     print(f"Loading unet checkpoint from {unet_path}")
     try:
@@ -56,7 +57,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     unet.eval()
     
     # Load codec based on config choice - similar to how it's done in train_flow.py
-    codec_choice = ldcfg(config, 'codec_choice')
+    codec_choice = ldcfg(config.codec, 'choice')
     print(f"Using codec: {codec_choice}")
 
     # Load the codec
@@ -70,7 +71,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
     elif codec_choice == "resize":
         # Resize codec preserves channel count and just scales dimensions
         latent_shape = (3, config.get('image_size', 32), config.get('image_size', 32))
-    elif code_choice == 'vqgan': 
+    elif codec_choice == 'vqgan': 
         # VQGAN typically does 2^num_downsamples reduction with internal_dim channels
         ds_factor = 2 ** ldcfg(config, 'num_downsamples', 3)
         latent_shape = (ldcfg(config,'vq_embedding_dim', 4), image_size//ds_factor, image_size//ds_factor)
@@ -90,7 +91,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
         # Generate samples with selected method
         print(f"calling sampler with curr_shape = {curr_shape}")
         if method == "rk45": 
-            images, nfe = rk45_sampler(unet, curr_shape, device, n_classes=n_classes)
+            images, nfe = rk45_sampler(unet, curr_shape, device, cond=None)
         else: 
             # Use existing sampler function for other methods
             images = sampler(unet, codec, 0, method, device, batch_size=curr_batch_size, 
@@ -112,7 +113,7 @@ def generate_samples(unet_path, config, output_dir=None, n_samples=10, cfg_stren
                 latent_files.append(img_filename)
         
         # Save decoded images
-        save_img_grid(decoded_images.cpu(), 0, method, nfe, tag=tag, use_wandb=False, output_dir=output_dir)
+        save_img_grid(decoded_images.cpu(), 0, nfe, tag=method, use_wandb=False, output_dir=output_dir)
         decoded_files = [os.path.join(output_dir, f"{tag}{method}_epoch_1_nfe_{nfe}.png")]
         
         # Save individual decoded images

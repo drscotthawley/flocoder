@@ -108,7 +108,12 @@ def imshow(img, filename):
     img = (img - imin) / (imax - imin) # rescale via max/min
     img = np.clip(img, 0, 1)
     npimg = (img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-    pil_img = Image.fromarray(npimg)
+    # # note npimg might be monochrome
+    print("npimg.shape = ",npimg.shape)
+    if npimg.shape[2] == 1:  # grayscale
+        pil_img = Image.fromarray(npimg.squeeze(2), mode='L')
+    else:  # RGB
+        pil_img = Image.fromarray(npimg)
     pil_img.save(filename)
 
 
