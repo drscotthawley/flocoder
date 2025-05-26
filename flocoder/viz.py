@@ -1,6 +1,6 @@
 import os
 import torch 
-from torchvision.utils import make_grid
+from torchvision.utils import make_grid, save_image
 import wandb
 import matplotlib.pyplot as plt
 import tempfile
@@ -103,6 +103,7 @@ def viz_codebooks(model, epoch, no_wandb=False): # RVQ
 
 
 def imshow(img, filename):
+    # rescales before saving
     imin, imax = img.min(), img.max()
     img = (img - imin) / (imax - imin) # rescale via max/min
     img = np.clip(img, 0, 1)
@@ -111,14 +112,18 @@ def imshow(img, filename):
     pil_img.save(filename)
 
 
-def save_img_grid(img, epoch, nfe, tag="", use_wandb=True, output_dir="output"):
+def save_img_grid(img, epoch, nfe, tag="", use_wandb=True, output_dir="output", show_batch_size=100):
     """Save image grid with consistent 10-column layout to match class conditioning"""
     filename = f"{tag}_epoch_{epoch + 1}_nfe_{nfe}.png"
     # Use nrow=10 to ensure grid columns match our class conditioning
-    img_grid = make_grid(img, nrow=10)
+    show_batch_size = min(show_batch_size, img.shape[0])
+    img = img[:show_batch_size]
+    img_grid = make_grid(img, nrow=10, normalize=True)
     file_path = os.path.join(output_dir, filename)
-    imshow(img_grid, file_path)
+    #imshow(img_grid, file_path)
+    save_image(img, file_path)
     name = f"demo/{tag}"
     if 'euler' in name: name = name + f"_nf{nfe}"
-    if use_wandb: wandb.log({name: wandb.Image(file_path, caption=f"Epoch: {epoch}")})
+    #if use_wandb: wandb.log({name: wandb.Image(file_path, caption=f"Epoch: {epoch}")})
+    if use_wandb: wandb.log({name: wandb.Image(img_grid, caption=f"Epoch: {epoch}")})
 

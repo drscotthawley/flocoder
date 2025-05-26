@@ -8,8 +8,9 @@ flow:
     num_heads: 8
     num_channels: 256
     num_residuals: 2
-    n_classes: 102
     condition: true
+    #dim_mults: [1, 2, 4, 4]
+    dim_mults: [1, 2, 4, 8]
 
 project_name: "flocoder-flow"
 

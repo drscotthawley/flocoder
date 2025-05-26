@@ -32,22 +32,23 @@ def handle_config_path():
             break
 
 
-def ldcfg(config, key, default=None, supply_defaults=False, debug=True, verbose=True):
+def ldcfg(config, key, default=None, supply_defaults=False, debug=False, verbose=True):
     # little helper function: hydra/omegaconf is nice but also a giant pain.
     # ithis gives precedence to anything in vqgan section, else falls back to main config, else default, else None
     # re. supply_defaults: Hydra is tricky enough that for some things you may want execution to crash if config is misread
+    assert config is not None, 'ldcfg: config is None, and needs to be not-None'
     cfg_dict = config
     answer = None
     if hasattr(config, 'to_container'):  # OmegaConf objects
         cfg_dict = OmegaConf.to_container(config, resolve=True)
-
+    if debug: print(f"ldcfg: key = {key}, cfg_dict = {cfg_dict}")
     # the order of cases is important here 
     if 'flow' in cfg_dict and cfg_dict['flow'] is not None and key in cfg_dict['flow']:
         answer =  cfg_dict['flow'][key]
     elif 'preencoding' in cfg_dict and key in cfg_dict['preencoding']: 
         answer = cfg_dict['preencoding'][key]
     elif 'codec' in cfg_dict and key in cfg_dict['codec']: 
-        return cfg_dict['codec'][key]
+        answer = cfg_dict['codec'][key]
     elif key in cfg_dict: 
         answer = cfg_dict[key]
     else:
@@ -119,3 +120,34 @@ def save_checkpoint(model, epoch=None, optimizer=None, keep=5, prefix="vqgan", c
     return ckpt_path
 
 
+
+
+class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
+    "I added this scheduler to decay the base learning rate after when the cosine restarts."
+    def __init__(self, optimizer, T_0, T_mult=1,
+                    eta_min=0, last_epoch=-1, verbose=False, decay=0.6):
+        super().__init__(optimizer, T_0, T_mult=T_mult,
+                            eta_min=eta_min, last_epoch=last_epoch, verbose=verbose)
+        self.decay = decay
+        self.initial_lrs = self.base_lrs
+
+    def step(self, epoch=None):
+        if epoch == None:
+            if self.T_cur + 1 == self.T_i:
+                if self.verbose:
+                    print("multiplying base_lrs by {:.4f}".format(self.decay))
+                self.base_lrs = [base_lr * self.decay for base_lr in self.base_lrs]
+        else:
+            if epoch < 0:
+                raise ValueError("Expected non-negative epoch, but got {}".format(epoch))
+            if epoch >= self.T_0:
+                if self.T_mult == 1:
+                    n = int(epoch / self.T_0)
+                else:
+                    n = int(math.log((epoch / self.T_0 * (self.T_mult - 1) + 1), self.T_mult))
+            else:
+                n = 0
+
+            self.base_lrs = [initial_lrs * (self.decay**n) for initial_lrs in self.initial_lrs]
+
+        super().step(epoch)

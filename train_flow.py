@@ -13,8 +13,9 @@ import hydra
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import load_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset
-from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg
+from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 from flocoder.sampling import sampler, warp_time
+
 
 
 class EMA:
@@ -62,27 +63,29 @@ def train_flow(config):
     # Extract parameters from config
     data_path = f"{config.data}_encoded_{config.codec.choice}"
     batch_size = ldcfg(config,'batch_size')
-    n_classes = ldcfg(config,'n_classes')
-    condition = ldcfg(config,'condition')
+    n_classes = ldcfg(config.flow.unet,'n_classes', 0,verbose=True)
+    if n_classes == 0: 
+        condition = False
+    else: 
+        condition = ldcfg(config,'condition',False)
     learning_rate = ldcfg(config,'learning_rate')
     epochs = ldcfg(config,'epochs')
     project_name = ldcfg(config,'project_name')
     run_name = ldcfg(config, 'run_name')
     no_wandb = ldcfg(config,'no_wandb', False)
     lambda_lowres = config.flow.get('lambda_lowres', 0.1) # might not have it
+    is_midi = any(x in data_path.lower() for x in ['pop909', 'midi'])
+    keep_gray = ldcfg(config.codec,'in_channels',3)==1
+    print("is_midi, keep_gray =",is_midi, keep_gray)
+
     
     print(f"data_path = {data_path}")
 
-    dataset = PreEncodedDataset(data_path) 
+    dataset = PreEncodedDataset(data_path, n_classes=n_classes) 
     sample_item, _ = dataset[0]
     latent_shape = tuple(sample_item.shape)
     C, H, W = latent_shape
     print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
-    
-    # If n_classes is not specifically set but the dataset has this info, use it
-    if n_classes <= 0 and hasattr(dataset, 'n_classes'):
-        n_classes = dataset.n_classes
-        print(f"Using dataset-provided n_classes: {n_classes}")
     
     # If we're using conditioning but don't have class info, warn and disable
     if condition and (n_classes is None or n_classes <= 0):
@@ -109,24 +112,19 @@ def train_flow(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device =", device)
 
-    codec = load_codec(config, device) # Load codec for inference/evaluation
+    codec = load_codec(config, device).eval() # Load codec for inference/evaluation
 
     # Create flow model
-    model = Unet(
-        dim=H,
-        channels=C,
-        dim_mults=(1, 2, 4),
-        condition=condition,
-        n_classes=n_classes,
-    )
-    model.to(device)
+    dim_mults = ldcfg(config,'dim_mults', [1,2,4,4], verbose=True)
+    model = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
     print(f"Model conditioning enabled: {hasattr(model, 'condition') and model.condition}")
     print(f"Model has cond_mlp: {hasattr(model, 'cond_mlp')}")
 
     loss_fn = torch.nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
+
     use_wandb = not no_wandb
-    
     if use_wandb: 
         wandb.init(project=project_name, name=run_name, config=dict(config))
 
@@ -179,7 +177,7 @@ def train_flow(config):
                 })
             
             pbar.set_postfix({"Loss/train":f"{loss.item():.4g}"})
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)  # gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping for stability
 
             optimizer.step()
             ema.update()
@@ -188,12 +186,13 @@ def train_flow(config):
         if (epoch < 10 and epoch % 1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): 
             # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
-            images = batch[:100].cpu()
+            images = batch.cpu() # batch[:100].cpu()
             # batch, score, target = None, None, None  # TODO wth was this line ever for? 
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval_kwargs = {'device':device, 'method':'rk45', 'use_wandb': use_wandb, 'output_dir': output_dir, 
-                           'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 100}
+            eval_kwargs = {'device':device, 'use_wandb': use_wandb, 'output_dir': output_dir, 
+                           'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 256,
+                           'is_midi':is_midi, 'keep_gray':keep_gray}
             sampler(model, codec, epoch, tag="target_data", images=images, **eval_kwargs)
             sampler(model, codec, epoch, tag="", target=target, target_labels=cond, **eval_kwargs) 
             ema.eval()
@@ -207,6 +206,21 @@ def train_flow(config):
             save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flowema_", ckpt_dir=f"checkpoints")
             ema.train()  # Switch back to regular weights
             keep_recent_files(100, directory=output_dir, pattern="*.png") # not too many image outputs
+
+        if epoch % 50 == 0 and epoch > 0:  # cheap batch size increaser. TODO: try https://github.com/ancestor-mithril/bs-scheduler
+            batch_size = min(batch_size * 2, 768)
+            print("Setting batch size to",batch_size,", remaking DataLoader.")
+            train_dataloader = DataLoader(
+                dataset=dataset,
+                batch_size=batch_size,  # Use the updated value
+                shuffle=True,
+                num_workers=12,
+                pin_memory=True,
+                persistent_workers=True,
+            )
+
+        scheduler.step()
+    # end of epoch loop
 
 
 handle_config_path()

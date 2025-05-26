@@ -99,7 +99,9 @@ def train_vqgan(config):
     batch_size = ldcfg(config, 'batch_size', 32)
     image_size = ldcfg(config, 'image_size', 128)
     data_path  = ldcfg(config, 'data', None)
-    num_workers = config.get('num_workers', 16)
+    num_workers = ldcfg(config,'num_workers', 16)
+    learning_rate = ldcfg(config,'learning_rate', 1e-4)
+    no_grad_ckpt = ldcfg(config, 'no_grad_ckpt', False)
     is_midi = any(x in data_path.lower() for x in ['pop909', 'midi'])
     print("is_midi =",is_midi)
     
@@ -120,25 +122,23 @@ def train_vqgan(config):
         use_checkpoint    = not ldcfg(config,'no_grad_ckpt', False),
     ).to(device)
 
-    optimizer = optim.Adam(codec.parameters(), lr=config.get('learning_rate', 1e-4), weight_decay=1e-5)
+    optimizer = optim.Adam(codec.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = None
 
-    # vgg is used for perceptual loss part of adversarial training
+    # vgg is used for perceptual loss part of adversarial training.  
     vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
     for param in vgg.parameters():
         param.requires_grad = False    
-    adv_loss = AdversarialLoss(device, in_channels=in_channels, use_checkpoint=not config.get('no_grad_ckpt', False)).to(device)
-    d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), 
-                            lr=config.get('learning_rate', 1e-4) * 0.1, 
-                            weight_decay=1e-5)
+    adv_loss = AdversarialLoss(device, in_channels=in_channels, use_checkpoint=not no_grad_ckpt, False)).to(device)
+    d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), lr=learning_rate * 0.1, weight_decay=1e-5)
 
     # Resume from checkpoint if specified
     start_epoch = 0
-    load_checkpoint = config.get('load_checkpoint', None)
+    load_checkpoint = ldcfg(config, 'load_checkpoint', None)
     if load_checkpoint is not None:
         print(f"Loading checkpoint from {load_checkpoint}...")
         checkpoint = torch.load(load_checkpoint, map_location=device)
-        codec = load_model_checkpoint(codec, checkpoint, frozen_only=False)
+        codec = load_model_checkpoint(codec, checkpoint, frozen_only=False) # overwrite model weights with checkpoint
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         print(f"Resuming training from epoch {start_epoch}")
     else:
@@ -271,20 +271,16 @@ def train_vqgan(config):
 
                     # Log validation visualizations for first batch
                     if batch_idx == 0 and not no_wandb:
-                        log_dict = {
-                            'epoch': epoch,
+                        log_dict = { 'epoch': epoch,
                             'codebook/mean_distance': dist_stats['codebook_mean_dist'],
                             'codebook/max_distance': dist_stats['codebook_max_dist'],
-                            **{f'validation/batch_{k}_loss': v for k, v in val_losses.items()},
-                        }
+                            **{f'validation/batch_{k}_loss': v for k, v in val_losses.items()}, }
                         if is_midi: 
                             note_metrics, metric_images = calc_note_metrics(recon, target_imgs, keep_gray=(in_channels==1))
-                            metric_grids = {k: make_grid(v[:8], nrow=8, normalize=True) 
-                                    for k, v in metric_images.items()}
+                            metric_grids = {k: make_grid(v[:8], nrow=8, normalize=True) for k, v in metric_images.items()}
                             log_dict = log_dict | { 
                                 **{f'note_metrics/{k}': v for k, v in note_metrics.items()},
-                                **{f'metric_images/{k}': wandb.Image(v, caption=k) for k, v in metric_grids.items()}
-                            }
+                                **{f'metric_images/{k}': wandb.Image(v, caption=k) for k, v in metric_grids.items()} }
                         
                         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:  # Add demo image visualization grid
                             nrow=8  # number of examples of each to show
@@ -296,6 +292,7 @@ def train_vqgan(config):
                             caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
                             log_dict['demo/examples'] = wandb.Image(make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
                             # TODO: could add viz of latents to demo/latents
+
                         wandb.log(log_dict)
 
         # Compute average validation losses
@@ -323,9 +320,7 @@ def train_vqgan(config):
     return 'Training completed successfully.'
 
 
-# Process any direct config file paths
-handle_config_path()
-
+handle_config_path() # Process any direct config file paths before hydra
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="flowers_sd")
 def main(config):

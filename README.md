@@ -142,6 +142,7 @@ Discussions are open!  Rather than starting some ad-hoc Discord server, let's sh
 - [x] Add metrics (to wandb out) to quantify flow training progress (sinkhorn, FID)
 - [x] Add Contributing guidelines
 - [ ] Try [variable size scheduler](https://github.com/ancestor-mithril/bs-scheduler)
+- [ ] Add audio example, e.g. using DAC
 - [ ] low-priority: Make RK4(5) integrator fully CUDA-compatible
 - [ ] Straighter/OT paths:  Add ReFlow, Minibatch OT, Ray's Rays, Curvature penalty,...
 - [ ] Add jitter / diffusion for comparison 

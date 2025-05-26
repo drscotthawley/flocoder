@@ -15,7 +15,7 @@ codec:
 
     # vqgan training
     batch_size: 64
-    learning_rate: 1e-3
+    learning_rate: 1.0e-4
     # warmup is before the adversarial training starts
     warmup_epochs: 5
     epochs: 2000
@@ -27,8 +27,8 @@ codec:
     lambda_ce: 0.0
     lambda_l1: 0.2
     lambda_mse: 0.5
-    lambda_perc: 1e-3
-    lambda_spec: 5e-4 
+    lambda_perc: 1.0e-3
+    lambda_spec: 5.0e-4 
     lambda_vq: 0.25 
     # only for midi_data:
     add_onsets: true

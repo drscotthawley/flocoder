@@ -25,6 +25,17 @@ def sinkhorn_loss(target, gen, max_B=128, device='cuda'):
     return sinkhorn_fn(t_vec, g_vec).item()
 
 
+def focal_loss(pred,                    # pred: logits tensor
+              target_binary,           # target_binary: binary tensor
+              alpha=0.9,              # class weighting: higher values give more weight to positive class
+              gamma=2.0):              # focusing parameter: higher values focus more on hard examples
+   """Focal loss for binary classification with logits, handles imbalanced loads"""
+   bce = F.binary_cross_entropy_with_logits(pred, target_binary, reduction='none')
+   p_t = torch.exp(-bce)  # probability of correct class
+   alpha_t = alpha * target_binary + (1 - alpha) * (1 - target_binary)  # class weighting
+   focal_weight = alpha_t * (1 - p_t) ** gamma
+   return (focal_weight * bce).mean()
+
 
 def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, C, H, W] tensor of predicted probabilities 
                                  target,                # target: [B, C, H, W] tensor of ground truth RGB where:
@@ -37,7 +48,10 @@ def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, C, H, W] ten
                                  eps=1e-8,              # Small value to avoid log(0)
                                  debug=False):
     """    Compute cross entropy loss for RGB piano roll images with thresholding    """
-    if debug: print(f"pred.shape = {pred.shape}, target.shape = {target.shape}")
+    if debug: 
+        print(f"pred.shape = {pred.shape}, target.shape = {target.shape}")
+        print(f"pred.min(),   pred.max() = ",pred.min(), pred.max())
+        print(f"target.min(), target.max() = ",target.min(), target.max())
     #targets & preds may have imagenet norm (if dataloader norm'd them) so before doing BCE loss we need to un-norm them
     target_unnorm = target  #...? did i forget to do something here?
     
@@ -51,7 +65,8 @@ def piano_roll_rgb_cross_entropy(pred,                  # pred: [B, C, H, W] ten
     target_binary = torch.where(target_unnorm > thresholds, torch.ones_like(target), torch.zeros_like(target))
     pred = pred / temperature # Scale logits by temperature
     if debug: print(f"pred.shape = {pred.shape}, target_binary.shape = {target_binary.shape}")
-    loss = F.binary_cross_entropy_with_logits(pred, target_binary)
+    #loss = F.binary_cross_entropy_with_logits(pred, target_binary)
+    loss = focal_loss(pred, target_binary)
     return loss.mean() # Sum across channels and average over batch and spatial dimensions
 
 
@@ -98,6 +113,7 @@ def compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, adv_loss=None, epoch=
         'spectral': spectral_loss(recon, target_imgs),
         'huber': F.huber_loss(recon, target_imgs, delta=1.0) 
     }
+    if epoch < config.get('warmup_epochs',5)+15: losses['ce'] = 0.0 # hold off on CE until things stabilize a bit
     
     # Only add adversarial losses after warmup
     if adv_loss is not None and epoch >= config.codec.warmup_epochs:
@@ -196,6 +212,10 @@ def fid_score(real, fake, device='cuda'):
     real_uint8 = to_uint8(real)
     fake_uint8 = to_uint8(fake)
 
+    if real_uint8.shape[1] == 1: 
+        real_uint8 = real_uint8.repeat(1, 3, 1, 1)
+        fake_uint8 = fake_uint8.repeat(1, 3, 1, 1)
+
     fid_metric.reset()
     fid_metric.update(real_uint8, real=True)
     fid_metric.update(fake_uint8, real=False)
@@ -211,7 +231,8 @@ def rgb2g(img_t):
    return (red + green).unsqueeze(-3)
 
 def g2rgb(gf_img, keep_gray=False): # gf = greyscale floatw
-   """Convert grayscale back to RGB: 0->BLACK, 1.0->RED, 0.5->GREEN, unless keep_gray is on in which case it becomes"""
+   """Convert grayscale back to RGB and quantizes
+   0->BLACK, 1.0->RED, 0.5->GREEN, unless keep_gray is on in which case it becomes binary rgb black/while"""
    if gf_img.shape[-3] == 3: return gf_img
    gf = gf_img.squeeze(-3)
    if keep_gray: 

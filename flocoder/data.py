@@ -143,7 +143,9 @@ class ImageListDataset(Dataset):
                  split='all',       # 'train', 'val', or 'all'
                  val_ratio=0.1,  # percentage for validation
                  seed=42,        # for reproducibility 
+                 redraw_blank=True,  # if (tranformed) image is blank, get a new one
                  debug=True):
+
         self.files = file_list
         # Apply split if needed
         if split != 'all' and len(file_list) > 0:
@@ -151,30 +153,34 @@ class ImageListDataset(Dataset):
             all_files = file_list.copy()  # Make a copy to avoid modifying the original
             random.shuffle(all_files)
             split_idx = int(len(all_files) * (1 - val_ratio))
-            
-            if split == 'train':
-                self.files = all_files[:split_idx]
-            else:  # 'val'
-                self.files = all_files[split_idx:]
+            self.files = all_files[:split_idx] if split=='train' else all_files[split_idx:]
 
         self.actual_len = len(self.files)
         self.images = [None]*self.actual_len
         self.transform = transform
-        if debug:
-            print(f"Dataset contains {self.actual_len} images")
+        self.redraw_blank = redraw_blank
+        self.max_redraws, self.redraw_tol = 15, 20.0
+
+        if debug: print(f"Dataset contains {self.actual_len} images")
         
-    def __len__(self):
-        return self.actual_len 
+    def __len__(self): return self.actual_len 
         
     def __getitem__(self, idx):
-        actual_idx = idx % self.actual_len  # Use modulo to wrap around the index
-        if self.images[actual_idx] is None: # lazy "pre-loading": it will eventualy store all images in CPU memory
+        actual_idx = idx % self.actual_len
+        if self.images[actual_idx] is None:
             self.images[actual_idx] = Image.open(self.files[actual_idx]).convert('RGB')
         img = self.images[actual_idx]
+    
+        if self.transform: img = self.transform(img)
+    
+        redraw_attempts = 0
+        while (self.redraw_blank and redraw_attempts < self.max_redraws and img.abs().sum() < self.redraw_tol):
+            idx = random.randint(0, self.actual_len - 1)
+            img, _ = self.__getitem__(idx)
+            redraw_attempts += 1
 
-        if self.transform:
-            img = self.transform(img)
-        return img, 0  
+        if redraw_attempts >= self.max_redraws: print("dataset: WARNING: hit max_redraws")
+        return img, 0
     
 
 class MIDIImageDataset(ImageListDataset):
@@ -190,7 +196,11 @@ class MIDIImageDataset(ImageListDataset):
                  total_only=True,    # if true, it will only keep the "_TOTAL_" version of each song
                  download=True,      # if true, it will download the datase -- leave this on for now
                  config=None,        # additional config info (starting to get too many kwargs!)
+                 redraw_blank=True,  # if (transformed) image is blank, get a new one
                  debug=False):
+        self.add_onsets = ldcfg(config,'add_onsets', True)
+        self.grayscale = ldcfg(config,'in_channels', 3) == 1
+        self.redraw_blank = redraw_blank
         
         if download: datasets.utils.download_and_extract_archive(url, download_root=root)
         download_dir = root / url.split("/")[-1].replace(".zip", "")
@@ -199,7 +209,6 @@ class MIDIImageDataset(ImageListDataset):
             raise FileNotFoundError(f"No MIDI files found in {download_dir}")
         if skip_versions: 
             self.midi_files = [f for f in self.midi_files if '/versions/' not in f]
-
         
         if debug: 
             print(f"download_dir: {download_dir}")
@@ -222,10 +231,7 @@ class MIDIImageDataset(ImageListDataset):
             self.midi_img_file_list = [f for f in self.midi_img_file_list if '_TOTAL' in f]
         if debug: print(f"len(midi_img_file_list): {len(self.midi_img_file_list)}")
 
-        self.add_onsets = ldcfg(config,'add_onsets', True)
-        self.grayscale = ldcfg(config,'in_channels', 3) == 1
-
-        super().__init__(self.midi_img_file_list, transform=transform, 
+        super().__init__(self.midi_img_file_list, transform=transform,   # We inherit from ImageListDataset
                          split=split, val_ratio=val_ratio, seed=seed, debug=debug)
  
     def convert_one(self, midi_file, debug=True):
@@ -268,16 +274,18 @@ class InfiniteDataset(IterableDataset):
 
 class PreEncodedDataset(Dataset):
     """Loads pre-encoded latent tensors with robust class handling"""
-    def __init__(self, data_dir, max_cache_items=10000):
+    def __init__(self, data_dir, max_cache_items=10000, n_classes=None):
         data_dir = os.path.expanduser(data_dir)
         self.data_dir = Path(data_dir)
         print(f"PreEncodedDataset: loading from {data_dir}")
 
         # Check for class directories (numeric directories)
+        # TODO: note that some of these may not be for classes, they may just be for convenience
         class_dirs = [d for d in self.data_dir.iterdir() if d.is_dir() and d.name.isdigit()]
 
         self.files, self._labels = [], []
-        self.has_classes = len(class_dirs) > 0
+        self.has_classes = len(class_dirs) > 0 
+        if n_classes is not None and n_classes == 0: self.has_classes=False  # directories aren't classes
 
         if self.has_classes:
             # Class directories found - use class-based structure

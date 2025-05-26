@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+  - common/base
+  - common/midi
+  - common/vqgan
+  - common/preencoding
+  - common/flow
+  - _self_
+
+preencoding:
+  vqgan_checkpoint: "vqgan_best.pt"
+
+# Override specific settings
+codec:
+  choice: vqgan 
+  learning_rate: 5.0e-5
+  commitment-weight: 0.6  # Higher for MIDI
+  lambda_ce: 2.5  # Higher cross-entropy for MIDI
+  lambda_perc: 5.0e-4
+  lambda_spec: 2.5e-5
+  project_name: "fc-gray-vqgan-midi"
+  # grayscale so no onsets
+  in_channels: 1
+  add_onsets: False
+  # try 3d for viz
+  vq_embedding_dim: 3
+
+
+flow:
+  batch_size: 256 
+  unet:
+    n_classes: 0
+    condition: false
+  project_name: "fc-flow-gray-vqgan-midi"

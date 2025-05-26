@@ -601,7 +601,7 @@ def load_codec(config, device):
         # Get model parameters, handle nested config structures
         # Create the VQVAE model
         codec = VQVAE(
-            in_channels=3,
+            in_channels=ldcfg(config, 'in_channels', 3),
             hidden_channels=ldcfg(config, 'hidden_channels', 256),
             num_downsamples=ldcfg(config, 'num_downsamples', 3),
             internal_dim=ldcfg(config, 'internal_dim', 256),

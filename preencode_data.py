@@ -16,7 +16,7 @@ import time
 import sys
 from torchvision import transforms, datasets
 import hydra
-from omegaconf import DictConfig
+from omegaconf import DictConfig, open_dict
 from types import SimpleNamespace
 
 from flocoder.general import handle_config_path, ldcfg
@@ -36,7 +36,7 @@ def encode_batch(codec, batch, device):
         batch = batch.to(device, non_blocking=True)
         return codec.encode(batch)
 
-def setup_dataset(data_path, image_size):
+def setup_dataset(data_path, image_size, config):
     """Set up and return the appropriate dataset based on the data path."""
     transform = image_transforms(image_size=image_size)
     if data_path is None or 'flowers' in str(data_path).lower():
@@ -46,8 +46,9 @@ def setup_dataset(data_path, image_size):
     elif 'food101' in str(data_path).lower():
         dataset = datasets.Food101(root=data_path, split='train', transform=transform, download=True)
     else: 
-        transform = midi_transforms(image_size=image_size, random_roll=True)
-        dataset = MIDIImageDataset(transform=transform, debug=True)
+        grayscale = ldcfg(config, 'in_channels', 3)==1
+        transform = midi_transforms(image_size=image_size, random_roll=True, grayscale=grayscale)
+        dataset = MIDIImageDataset(transform=transform, config=config, debug=True)
     
     return InfiniteDataset(dataset)  # Wrap in infinite dataset for augmentation
 
@@ -156,6 +157,9 @@ def main(config) -> None:
     # Debug - print the config structure
     print("Config keys:", list(config.keys()))
     print("Full config:", config)
+    # hack: neutralize/delete any 'flow' or 'preencoding' sections from config
+    with open_dict(config):
+        if 'flow' in config: del config['flow']
 
     # Set up CUDA
     torch.cuda.empty_cache()
@@ -178,7 +182,7 @@ def main(config) -> None:
     codec = load_codec(config, device)
     
     # Setup dataset and output directory
-    dataset = setup_dataset(data_path, image_size)
+    dataset = setup_dataset(data_path, image_size, config)
     output_dir = setup_output_dir(output_dir)
     
     # Process the dataset
