@@ -16,7 +16,7 @@ import time
 import sys
 from torchvision import transforms, datasets
 import hydra
-from omegaconf import DictConfig, open_dict
+from omegaconf import DictConfig, open_dict, OmegaConf
 from types import SimpleNamespace
 
 from flocoder.general import handle_config_path, ldcfg
@@ -36,19 +36,19 @@ def encode_batch(codec, batch, device):
         batch = batch.to(device, non_blocking=True)
         return codec.encode(batch)
 
-def setup_dataset(data_path, image_size, config):
+def setup_dataset(data_path, image_size, config, split='train'):
     """Set up and return the appropriate dataset based on the data path."""
     transform = image_transforms(image_size=image_size)
     if data_path is None or 'flowers' in str(data_path).lower():
-        dataset = datasets.Flowers102(root=data_path, split='train', transform=transform, download=True)
+        dataset = datasets.Flowers102(root=data_path, split=split, transform=transform, download=True)
     elif 'stl10' in str(data_path).lower():
-        dataset = datasets.STL10(root=data_path, split='train', transform=transform, download=True)
+        dataset = datasets.STL10(root=data_path, split=split, transform=transform, download=True)
     elif 'food101' in str(data_path).lower():
-        dataset = datasets.Food101(root=data_path, split='train', transform=transform, download=True)
+        dataset = datasets.Food101(root=data_path, split=split, transform=transform, download=True)
     else: 
         grayscale = ldcfg(config, 'in_channels', 3)==1
         transform = midi_transforms(image_size=image_size, random_roll=True, grayscale=grayscale)
-        dataset = MIDIImageDataset(transform=transform, config=config, debug=True)
+        dataset = MIDIImageDataset(transform=transform, split=split, config=config, debug=True)
     
     return InfiniteDataset(dataset)  # Wrap in infinite dataset for augmentation
 
@@ -56,6 +56,7 @@ def setup_dataset(data_path, image_size, config):
 def setup_output_dir(output_dir):
     """Set up and validate the output directory."""
     output_dir = Path(output_dir).expanduser().absolute()
+    print(f"Trying to setup  output directory {output_dir}")
     
     if output_dir.exists() and output_dir.is_dir():
         print(f"Found existing directory {output_dir}\nAborting. Delete that directory and try again.")
@@ -72,7 +73,7 @@ def setup_output_dir(output_dir):
     return output_dir
 
 
-def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, num_workers, device, augs_per=512):
+def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, num_workers, device, augs_per=768):
     """Process dataset with optimized parallel encoding and saving"""
     print(f"Processing dataset with {dataset.actual_len} images")
     print(f"Dataset type: {type(dataset)}")
@@ -182,21 +183,23 @@ def main(config) -> None:
     
     codec = setup_codec(config, device)
     
-    # Setup dataset and output directory
-    dataset = setup_dataset(data_path, image_size, config)
-    output_dir = setup_output_dir(output_dir)
-    
-    # Process the dataset
-    process_dataset(
-        codec=codec,
-        dataset=dataset,
-        output_dir=output_dir,
-        batch_size=batch_size,
-        max_storage_bytes=max_storage_gb * 1024**3,
-        num_workers=num_workers,
-        device=device,
-        augs_per=augs_per
-    )
+    for split in ['train','val']: 
+        print(f"\nWorking on split =",split)
+        # Setup dataset and output directory
+        dataset = setup_dataset(data_path, image_size, config, split=split)
+        split_output_dir = setup_output_dir(output_dir+f"/{split}")
+        
+        # Process the dataset
+        process_dataset(
+            codec=codec,
+            dataset=dataset,
+            output_dir=split_output_dir,
+            batch_size=batch_size,
+            max_storage_bytes=max_storage_gb * 1024**3,
+            num_workers=num_workers,
+            device=device,
+            augs_per=augs_per
+        )
 
 
 if __name__ == "__main__":
