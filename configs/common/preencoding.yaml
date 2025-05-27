@@ -4,4 +4,4 @@ preencoding:
   batch_size: 32
   num_workers: 8
   max_storage_gb: 50
-  augs_per: 768
+  augs_per: 1024

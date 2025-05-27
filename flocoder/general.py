@@ -131,7 +131,7 @@ class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
     def __init__(self, optimizer, T_0, T_mult=1,
                     eta_min=0, last_epoch=-1, verbose=False, decay=0.6):
         super().__init__(optimizer, T_0, T_mult=T_mult,
-                            eta_min=eta_min, last_epoch=last_epoch, verbose=verbose)
+                            eta_min=eta_min, last_epoch=last_epoch)
         self.decay = decay
         self.initial_lrs = self.base_lrs
 

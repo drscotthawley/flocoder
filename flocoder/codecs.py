@@ -641,10 +641,15 @@ def setup_codec(config, device, no_natten=False, load_checkpoint=True, eval=True
             if checkpoint_path.lower() != "sd" and not os.path.exists(checkpoint_path):
                 raise FileNotFoundError(f"Codec checkpoint file {checkpoint_path} not found.")
     
+            #codec.load_state_dict(checkpoint['model_state_dict'])
             print(f"Loading codec checkpoint from {checkpoint_path}")
-            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+            try:
+                checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+            except:
+                # Fallback for checkpoints that contain config objects
+                checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
             codec.load_state_dict(checkpoint['model_state_dict'])
 
-    if eval: codec=code.eval()
+    if eval: codec=codec.eval()
     print("Codec model ready")
     return codec

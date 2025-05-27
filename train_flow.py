@@ -83,33 +83,33 @@ def train_flow(config):
     keep_gray = ldcfg(config.codec,'in_channels',3)==1
     print("is_midi, keep_gray =",is_midi, keep_gray)
 
-    
-    print(f"data_path = {data_path}")
-
-    dataset = PreEncodedDataset(data_path, n_classes=n_classes) 
-    sample_item, _ = dataset[0]
-    latent_shape = tuple(sample_item.shape)
-    C, H, W = latent_shape
-    print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
-    
     # If we're using conditioning but don't have class info, warn and disable
     if condition and (n_classes is None or n_classes <= 0):
         print("Warning: Conditioning requested but no class information available. Disabling conditioning.")
         condition = False
         n_classes = 0
+    
+    print(f"data_path = {data_path}")
+    train_path, val_path = f"{data_path}/train",  f"{data_path}/val"
+
+    print(f"Loading train data from: {train_path}")
+    train_dataset = PreEncodedDataset(train_path, n_classes=n_classes)
+    train_dataloader = DataLoader( dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
+            pin_memory=True, persistent_workers=True,)
+    dataset, dataloader = train_dataset, train_dataloader # aliases to avoid errors later
+
+    print(f"Loading val data from: {val_path}")
+    val_dataset = PreEncodedDataset(val_path, n_classes=n_classes)
+    val_dataloader = DataLoader( dataset=val_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
+            pin_memory=True, persistent_workers=True,)
+
+    sample_item, _ = dataset[0]
+    latent_shape = tuple(sample_item.shape)
+    C, H, W = latent_shape
+    print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
 
     print(f"Configuring model for {n_classes} classes, conditioning = {condition}\n")
     #C, H, W = 4, 16, 16 # TODO: read this from data!!
-
-    train_dataloader = DataLoader(
-        dataset=dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=12,
-        pin_memory=True,
-        persistent_workers=True,
-    )
-    dataloader = train_dataloader # alias to avoid errors later
 
     output_dir = f"output_{data_path.split('/')[-1]}-{H}x{W}" 
     os.makedirs(output_dir, exist_ok=True)
@@ -127,7 +127,7 @@ def train_flow(config):
 
     loss_fn = torch.nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
+    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
 
     use_wandb = not no_wandb
     if use_wandb: 
@@ -188,21 +188,23 @@ def train_flow(config):
             ema.update()
 
         # Evals / Metrics / Viz
-        if (epoch < 10 and epoch % 1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)): 
+        if (epoch < 10 and epoch % 1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)):
+            model.eval()
+            val_batch, val_cond = next(iter(val_dataloader))  # Fixed missing parenthesis
             # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
-            images = batch.cpu() # batch[:100].cpu()
-            # batch, score, target = None, None, None  # TODO wth was this line ever for? 
+            images = val_batch.cpu()  # Use validation batch for target data
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval_kwargs = {'device':device, 'use_wandb': use_wandb, 'output_dir': output_dir, 
-                           'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 256,
-                           'is_midi':is_midi, 'keep_gray':keep_gray}
-            sampler(model, codec, epoch, tag="target_data", images=images, **eval_kwargs)
-            sampler(model, codec, epoch, tag="", target=target, target_labels=cond, **eval_kwargs) 
+            eval_kwargs = {'device':device, 'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
+                     'latent_shape': latent_shape, 'batch_size': 256, 'is_midi':is_midi, 'keep_gray':keep_gray}
+            sampler(model, codec, epoch, tag="val_target_data", images=images, **eval_kwargs)
+            sampler(model, codec, epoch, tag="val_", target=val_batch, target_labels=val_cond, **eval_kwargs)  # Fixed target reference
             ema.eval()
-            sampler(model, codec, epoch, tag="ema_", **eval_kwargs)
+            sampler(model, codec, epoch, tag="val_ema_", **eval_kwargs)
             ema.train()
+            model.train()
+
 
         # Checkpoints
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs

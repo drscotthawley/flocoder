@@ -207,7 +207,7 @@ class MIDIImageDataset(ImageListDataset):
                  download=True,      # if true, it will download the datase -- leave this on for now
                  config=None,        # additional config info (starting to get too many kwargs!)
                  redraw_blank=True,  # if (transformed) image is blank, get a new one
-                 debug=False):
+                 debug=True):
         self.add_onsets = ldcfg(config,'add_onsets', True)
         self.grayscale = ldcfg(config,'in_channels', 3) == 1
         self.redraw_blank = redraw_blank
@@ -238,11 +238,31 @@ class MIDIImageDataset(ImageListDataset):
         if not self.midi_img_file_list:
             raise FileNotFoundError(f"No image files found in {self.midi_img_dir}")
         if total_only:
+            print("MIDIImageDataset: total_only = True. Grabbing only files with _TOTAL in the name")
             self.midi_img_file_list = [f for f in self.midi_img_file_list if '_TOTAL' in f]
         if debug: print(f"len(midi_img_file_list): {len(self.midi_img_file_list)}")
 
+        # POP909 can have multiple files with the same content (e.g. song_001_PIANO.png, song_001_TOTAL.png)
+        # the total_only kwarg (above) can help avoid data leakage between train and val subsets, but just to
+        # We need to do our own train/val splitting to avoid 'leakage'
+        if split != 'all':
+            # Extract unique song basenames (everything before instrument suffix)
+            song_basenames = list(set([os.path.basename(f).split('_')[0] for f in self.midi_img_file_list]))
+            random.seed(seed)
+            random.shuffle(song_basenames)
+            split_idx = int(len(song_basenames) * (1 - val_ratio))
+        
+            if split == 'train':
+                keep_songs = set(song_basenames[:split_idx])
+            else:  # split == 'val'
+                keep_songs = set(song_basenames[split_idx:])
+        
+            # Filter file list to only include files from selected songs
+            self.midi_img_file_list = [f for f in self.midi_img_file_list
+                              if os.path.basename(f).split('_')[0] in keep_songs]
+
         super().__init__(self.midi_img_file_list, transform=transform,   # We inherit from ImageListDataset
-                         split=split, val_ratio=val_ratio, seed=seed, debug=debug)
+                         split='all', val_ratio=val_ratio, seed=seed, debug=debug) # split='all' since we already did the split
  
     def convert_one(self, midi_file, debug=True):
         if debug: print(f"Converting {midi_file} to image")
