@@ -7,17 +7,19 @@ defaults:
   - common/flow
   - _self_
 
-preencoding:
-  vqgan_checkpoint: "vqgan_best.pt"
 
 # Override specific settings
 codec:
   choice: "vqgan"
-  learning_rate: 5.0e-5
+    #learning_rate: 5.0e-5
+    #warmup_epochs: 5
+  learning_rate: 1.0e-4
+  warmup_epochs: 20
   commitment-weight: 0.6  # Higher for MIDI
-  lambda_ce: 2.5  # Higher cross-entropy for MIDI
-  lambda_perc: 5.0e-4
-  lambda_spec: 2.5e-5
+  lambda_ce: 4.0  # Higher cross-entropy for MIDI
+  lambda_mse: 4.0
+  lambda_perc: 2.0e-5 # perc loss has little meaning for midi PRs
+  lambda_spec: 0.0  # could use but don't need
   project_name: "fc-gray-vqgan-midi"
   # grayscale so no onsets
   in_channels: 1
@@ -25,6 +27,8 @@ codec:
   # try 3d for viz
   vq_embedding_dim: 3
 
+preencoding:
+  vqgan_checkpoint: "vqgan_best.pt"
 
 flow:
   batch_size: 256 

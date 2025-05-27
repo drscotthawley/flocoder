@@ -3,6 +3,7 @@
 data: "~/datasets/Oxford_Flowers102/images"
 image_size: 128
 no_wandb: false
+num_workers: 8
 load_checkpoint: ~
 run_name: ~
 

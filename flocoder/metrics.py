@@ -4,9 +4,11 @@ import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 from torch import nn
 from torch.utils.checkpoint import checkpoint
-from .patch_discriminator import PatchDiscriminator
 from torchmetrics.image.fid import FrechetInceptionDistance
 
+from .patch_discriminator import PatchDiscriminator
+from .vqgan_plus import VQGANPlusPatchDiscriminator
+from .general import ldcfg
 
 ### Related to losses/differentiable metrics
 # Note: not all of these actually get used all the time... 
@@ -86,14 +88,42 @@ def perceptual_loss(vgg, img1, img2):
     return loss
 
 
+# In metrics.py, replace perceptual_loss function:
+def resnet_perceptual_loss(img1, img2, device='cuda'):
+    """ResNet50 logits-based perceptual loss as used in VQGAN+;  Not good for MIDI"""
+    import torchvision.models as models
 
-def pwrspec(y, eps=1e-8): 
-    # called by spectral_loss
+    # Load pretrained ResNet50 (cache this globally)
+    if not hasattr(resnet_perceptual_loss, 'resnet'):
+        resnet_perceptual_loss.resnet = models.resnet50(pretrained=True).to(device).eval()
+        for param in resnet_perceptual_loss.resnet.parameters():
+            param.requires_grad = False
+
+    resnet = resnet_perceptual_loss.resnet
+
+    # Normalize to ImageNet range
+    mean = torch.tensor([0.485, 0.456, 0.406])[None, :, None, None].to(device)
+    std = torch.tensor([0.229, 0.224, 0.225])[None, :, None, None].to(device)
+
+    img1_norm = (img1 - mean) / std
+    img2_norm = (img2 - mean) / std
+
+    # Get logits (before final classification layer)
+    logits1 = resnet(img1_norm)
+    logits2 = resnet(img2_norm)
+
+    return F.mse_loss(logits1, logits2)
+
+
+def pwrspec(y, eps=1e-4): 
+    # called by spectral_loss; 
+    # Note: to avoid gradient explosion, don't use the log of this with autograd. Though log(1 + this) is maybe ok 
     if y.dtype != torch.float: 
         y = y.to(torch.float)  # Cast to float even if MP's on, b/c fft isn't optimized for half
-    return torch.log(eps + torch.abs(torch.fft.fft2(y))) # use the log-magnitude. (no phase info)
+    return torch.abs(torch.fft.fft2(y)) # just the magnitude, no phase info. 
 
 def spectral_loss(x, x_recon):
+    """optional: experimental and not needed"""
     x_spec, x_recon_spec = pwrspec(x), pwrspec(x_recon)
     # TODO: maybe flatten the spectrum or just grab high freqs; spatial MSE loss (elsewhere) already emphasizes the lows
     if torch.is_autocast_enabled(): 
@@ -106,42 +136,44 @@ def spectral_loss(x, x_recon):
 def compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, adv_loss=None, epoch=None, config=None, fakez_recon=None): #,sinkhorn_loss=None,)
     """Compute many losses in a single place. Returns dict of loss tensors."""
     losses = {
-        'ce': piano_roll_rgb_cross_entropy(recon, target_imgs),
         'mse': F.mse_loss(recon, target_imgs),
-        'vq': vq_loss, # vq_loss is already computed in the quantizer (bottleneck of the VQGAN)
-        'perceptual': perceptual_loss(vgg, recon, target_imgs), 
-        'spectral': spectral_loss(recon, target_imgs),
-        'huber': F.huber_loss(recon, target_imgs, delta=1.0) 
+        'vq': vq_loss, # vq_loss is already computed in the quantizer (bottleneck of the VQGAN) 
     }
-    if epoch < config.get('warmup_epochs',5)+15: losses['ce'] = 0.0 # hold off on CE until things stabilize a bit
+    cc = config.codec 
+    if cc.lambda_perc > 0: 
+        losses['perceptual'] = perceptual_loss(vgg, recon, target_imgs)
+    #'perceptual': resnet_perceptual_loss(recon, target_imgs),  # as per VQGAN+
+    #'spectral': spectral_loss(recon, target_imgs),  # nah
+    # 'huber': F.huber_loss(recon, target_imgs, delta=1.0) 
+
+    if cc.lambda_ce > 0: # anything where we demand pixel-wise presision, e.g. MIDI
+       if False and epoch < config.get('warmup_epochs',5)+15: 
+           losses['ce'] = 0.0 # hold off on CE until things stabilize a bit
+       else:
+           losses['ce'] =  piano_roll_rgb_cross_entropy(recon, target_imgs)
     
     # Only add adversarial losses after warmup
     if adv_loss is not None and epoch >= config.codec.warmup_epochs:
         d_loss, real_features = adv_loss.discriminator_loss(target_imgs, recon)
         g_loss = adv_loss.generator_loss(recon, real_features)
         losses['d_loss'] = d_loss
-        losses['g_loss'] = config.codec.lambda_adv * g_loss
+        losses['g_loss'] = config.codec.lambda_gen * g_loss
 
     return losses
 
 
 def get_total_vqgan_loss(losses, config):
     """Compute weighted sum of losses."""
-    cc = config.codec 
-    total = (
-        cc.lambda_mse*losses['mse'] + \
-        cc.lambda_l1*losses['huber'] + \
-        cc.lambda_vq*losses['vq'] + \
-        cc.lambda_perc * losses['perceptual'] + \
-        cc.lambda_spec * losses['spectral'] \
-        + cc.lambda_ce*losses['ce']
-    )
-
-    if 'g_loss' in losses: total = total + losses['g_loss']
-    # note: d_loss gets updated elsewhere and not included in total vqgan loss
-    if 's_loss' in losses: total = total + cc.lambda_sinkhorn*losses['s_loss'] # haven't found this helpful, so s_loss probably won't be in there
-
-
+    cc = config.codec
+    total = (cc.lambda_mse * losses['mse'] +
+             cc.lambda_vq * losses['vq'] +
+             cc.lambda_ce * losses.get('ce', 0.0) +
+             cc.lambda_perc * losses.get('perceptual', 0.0) +
+             losses.get('g_loss', 0.0)  )
+             # other losses I tried but don't need: 
+             # + cc.lambda_spec * losses['spectral'] \
+             #+ cc.lambda_l1*losses['huber'] + \
+             #+ cc.lambda_sinkhorn * losses.get('s_loss', 0.0))
     return total
 
 
@@ -157,7 +189,8 @@ class AdversarialLoss(nn.Module):
         super().__init__()
 
         self.device = device
-        self.discriminator = PatchDiscriminator(in_channels=in_channels, use_checkpoint=use_checkpoint).to(device)
+        #self.discriminator = PatchDiscriminator(in_channels=in_channels, use_checkpoint=use_checkpoint).to(device)
+        self.discriminator = VQGANPlusPatchDiscriminator(in_channels=in_channels, use_checkpoint=use_checkpoint).to(device)
         self.criterion = hinge_d_loss
 
         self.register_buffer('real_label', torch.ones(1))

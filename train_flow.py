@@ -16,7 +16,7 @@ use_fused_na()
 
 
 from flocoder.unet import Unet, MRUnet
-from flocoder.codecs import load_codec
+from flocoder.codecs import setup_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset
 from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 from flocoder.sampling import sampler, warp_time
@@ -117,7 +117,7 @@ def train_flow(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("device =", device)
 
-    codec = load_codec(config, device).eval() # Load codec for inference/evaluation
+    codec = setup_codec(config, device).eval() # Load codec for inference/evaluation
 
     # Create flow model
     dim_mults = ldcfg(config,'dim_mults', [1,2,4,4], verbose=True)

@@ -17,7 +17,7 @@ from natten import use_fused_na
 use_fused_na()
 
 from flocoder.unet import Unet
-from flocoder.codecs import load_codec
+from flocoder.codecs import setup_codec
 from flocoder.sampling import generate_latents, decode_latents
 from flocoder.general import handle_config_path, ldcfg
 from flocoder.viz import save_img_grid, imshow
@@ -46,7 +46,7 @@ def load_models_once(unet_path,    # path to saved unet checkpoint
         if device is None: device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Load codec based on config choice - similar to how it's done in train_flow.py
-        _codec = load_codec(config, device).eval()
+        _codec = setup_codec(config, device).eval()
         
         # Handle checkpoint path
         if not unet_path.endswith(".pt"): 

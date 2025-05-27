@@ -76,13 +76,22 @@ class MyRGBToGrayscale:
         grayscale = tensor.sum(dim=0, keepdim=True).clamp(0, 1.0)
         return grayscale
 
-def midi_transforms(image_size=128, random_roll=True, grayscale=False):
+class BinaryGate:
+    def __init__(self, threshold=0.3):
+        self.threshold = threshold
+
+    def __call__(self, tensor):
+        return torch.where(tensor >= self.threshold, torch.ones_like(tensor), torch.zeros_like(tensor))
+
+
+def midi_transforms(image_size=128, random_roll=True, grayscale=False, binary_thresh=0.3):
     """Standard image transformations for training and validation."""
     transform_list = [
         RandomRoll() if random_roll else None,
         transforms.RandomCrop(image_size),
         transforms.ToTensor()]
     if grayscale: transform_list.append(MyRGBToGrayscale())
+    if binary_thresh > 0: transform_list.append(BinaryGate(binary_thresh))
     return transforms.Compose([t for t in transform_list if t is not None])
 
 
@@ -144,6 +153,7 @@ class ImageListDataset(Dataset):
                  val_ratio=0.1,  # percentage for validation
                  seed=42,        # for reproducibility 
                  redraw_blank=True,  # if (tranformed) image is blank, get a new one
+                 redraw_tol= 50, # minimum number of nonzero pixels so that image won't be re-'drawn' from dataset
                  debug=True):
 
         self.files = file_list
@@ -159,7 +169,7 @@ class ImageListDataset(Dataset):
         self.images = [None]*self.actual_len
         self.transform = transform
         self.redraw_blank = redraw_blank
-        self.max_redraws, self.redraw_tol = 15, 20.0
+        self.max_redraws, self.redraw_tol = 15, redraw_tol
 
         if debug: print(f"Dataset contains {self.actual_len} images")
         

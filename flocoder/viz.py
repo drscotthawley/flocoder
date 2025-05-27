@@ -59,10 +59,8 @@ def viz_codebooks(model, epoch, no_wandb=False): # RVQ
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
         plt.savefig(tmpfile.name, format='png', bbox_inches='tight', pad_inches=0)
         tmpfile.flush()
-        wandb.log({
-            'codebook/vectors': wandb.Image(tmpfile.name, 
-                caption=f'Epoch {epoch} - RVQ Codebook Vectors')
-        })
+        if wandb.run is not None: 
+            wandb.log({ 'codebook/vectors': wandb.Image(tmpfile.name, caption=f'Epoch {epoch} - RVQ Codebook Vectors') })
     plt.close()
 
     # Second figure: Histograms
@@ -93,10 +91,7 @@ def viz_codebooks(model, epoch, no_wandb=False): # RVQ
     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
         plt.savefig(tmpfile.name, format='png', bbox_inches='tight', pad_inches=0)
         tmpfile.flush()
-        wandb.log({
-            'codebook/histograms': wandb.Image(tmpfile.name, 
-                caption=f'Epoch {epoch} - Histograms of RVQ Codebook Vectors')
-        })
+        if wandb.run is not None: wandb.log({ 'codebook/histograms': wandb.Image(tmpfile.name, caption=f'Epoch {epoch} - Histograms of RVQ Codebook Vectors') })
 
     plt.close()
 
@@ -127,6 +122,5 @@ def save_img_grid(img, epoch, nfe, tag="", use_wandb=True, output_dir="output", 
     save_image(img, file_path)
     name = f"demo/{tag}"
     if 'euler' in name: name = name + f"_nf{nfe}"
-    #if use_wandb: wandb.log({name: wandb.Image(file_path, caption=f"Epoch: {epoch}")})
-    if use_wandb: wandb.log({name: wandb.Image(img_grid, caption=f"Epoch: {epoch}")})
+    if wandb.run is not None: wandb.log({name: wandb.Image(img_grid, caption=f"Epoch: {epoch}")})
 

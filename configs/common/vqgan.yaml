@@ -23,7 +23,7 @@ codec:
     base_lr: 1e-4
     image_size: 128
     # regularization parameters
-    lambda_adv: 0.03
+    lambda_gen: 0.05
     lambda_ce: 0.0
     lambda_l1: 0.2
     lambda_mse: 0.5

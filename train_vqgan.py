@@ -25,10 +25,10 @@ from natten import use_fused_na
 use_fused_na()
 
 from flocoder.data import create_image_loaders
-from flocoder.codecs import VQVAE, load_codec
+from flocoder.codecs import VQVAE, setup_codec
 from flocoder.viz import viz_codebooks, denormalize
 from flocoder.metrics import *  # there's a lot
-from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path, ldcfg
+from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 
 
 class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
@@ -111,19 +111,20 @@ def train_vqgan(config):
     train_loader, val_loader = create_image_loaders( batch_size=batch_size, image_size=image_size, data_path=data_path, 
         num_workers=num_workers, is_midi=is_midi, config=config)
 
-    # Initialize model - either directly or using load_codec
+    # Initialize model - either directly or using setup_codec
     in_channels       = ldcfg(config,'in_channels', 3)
-    codec = VQVAE(
-        in_channels       = in_channels,
-        hidden_channels   = ldcfg(config,'hidden_channels', 256),
-        num_downsamples   = ldcfg(config,'num_downsamples', 3),
-        vq_num_embeddings = ldcfg(config,'vq_num_embeddings', 64),
-        internal_dim      = ldcfg(config,'internal_dim', 128),
-        vq_embedding_dim  = ldcfg(config,'vq_embedding_dim', 4),
-        codebook_levels   = ldcfg(config,'codebook_levels', 4),
-        commitment_weight = ldcfg(config,'commitment_weight', 0.25),
-        use_checkpoint    = not ldcfg(config,'no_grad_ckpt', False),
-    ).to(device)
+    codec = setup_codec(config, device, load_checkpoint=False, eval=False).train()
+    # codec = VQVAE(
+        # in_channels       = in_channels,
+        # hidden_channels   = ldcfg(config,'hidden_channels', 256),
+        # num_downsamples   = ldcfg(config,'num_downsamples', 3),
+        # vq_num_embeddings = ldcfg(config,'vq_num_embeddings', 64),
+        # internal_dim      = ldcfg(config,'internal_dim', 128),
+        # vq_embedding_dim  = ldcfg(config,'vq_embedding_dim', 4),
+        # codebook_levels   = ldcfg(config,'codebook_levels', 4),
+        # commitment_weight = ldcfg(config,'commitment_weight', 0.25),
+        # use_checkpoint    = not ldcfg(config,'no_grad_ckpt', False),
+    # ).to(device)
 
     optimizer = optim.Adam(codec.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = None
@@ -132,8 +133,9 @@ def train_vqgan(config):
     vgg = vgg16(weights='IMAGENET1K_V1').features[:16].to(device).eval()
     for param in vgg.parameters():
         param.requires_grad = False    
-    adv_loss = AdversarialLoss(device, in_channels=in_channels, use_checkpoint=not no_grad_ckpt, False)).to(device)
-    d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), lr=learning_rate * 0.1, weight_decay=1e-5)
+    adv_loss = AdversarialLoss(device, in_channels=in_channels, use_checkpoint=not no_grad_ckpt).to(device)
+    disc_lr = learning_rate * 0.001  # discriminator needs a slow learning rate
+    d_optimizer = optim.Adam(adv_loss.discriminator.parameters(), lr=disc_lr, weight_decay=1e-5)
 
     # Resume from checkpoint if specified
     start_epoch = 0
@@ -172,7 +174,13 @@ def train_vqgan(config):
         pbar = tqdm(train_loader, desc=f'Epoch {epoch}/{epochs}')
         for batch_idx, batch in enumerate(pbar):
             # Get batch data
-            source_imgs = batch[0].to(device)
+            if len(batch) == 2:  # (images, labels)
+                source_imgs, labels = batch
+            elif len(batch) == 4:  # PairDataset: (src_img, src_class, tgt_img, tgt_class)
+                source_imgs, _, target_imgs, _b = batch
+            else:
+                source_imgs = batch
+            source_imgs = source_imgs.to(device)
             target_imgs = source_imgs
             
             noise_strength = 0.0 if epoch < warmup_epochs else 0.2 * min(1.0, (epoch - warmup_epochs) / 10)
@@ -204,6 +212,7 @@ def train_vqgan(config):
 
                     d_optimizer.zero_grad()
                     d_loss.backward()
+
                     nn.utils.clip_grad_norm_(adv_loss.discriminator.parameters(), max_norm=1.0)
                     grad_stats = get_gradient_stats(adv_loss.discriminator)
                     grad_stats_list.append(grad_stats)
@@ -283,20 +292,21 @@ def train_vqgan(config):
                             metric_grids = {k: make_grid(v[:8], nrow=8, normalize=True) for k, v in metric_images.items()}
                             log_dict = log_dict | { 
                                 **{f'note_metrics/{k}': v for k, v in note_metrics.items()},
-                                **{f'metric_images/{k}': wandb.Image(v, caption=k) for k, v in metric_grids.items()} }
+                                **{f'metric_images/{k}': wandb.Image(v, caption=f'Epoch: {epoch}: {k}') for k, v in metric_grids.items()} }
                         
                         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:  # Add demo image visualization grid
                             nrow=8  # number of examples of each to show
                             orig = batch[0][:nrow].to(device)
                             recon = torch.clamp(recon[:nrow], orig.min(), orig.max())
                             combined = torch.cat([orig, recon])
-                            if is_midi: combined = g2rgb(combined, keep_gray=(in_channels==1))
+                            #if is_midi: combined = g2rgb(combined, keep_gray=(in_channels==1))
                             viz_images = denormalize( combined )
                             caption = f'Epoch {epoch} - Top: Source, Bottom: Recon'
                             log_dict['demo/examples'] = wandb.Image(make_grid(viz_images, nrow=nrow, normalize=True), caption=caption)
+                            if is_midi: log_dict['demo/binary'] = wandb.Image(make_grid(denormalize(g2rgb(combined, keep_gray=(in_channels==1))), nrow=nrow, normalize=True), caption=caption)
                             # TODO: could add viz of latents to demo/latents
 
-                        wandb.log(log_dict)
+                        if wandb.run is not None: wandb.log(log_dict)
 
         # Compute average validation losses
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
@@ -312,7 +322,7 @@ def train_vqgan(config):
                 **{f'epoch/train_{k}_loss': v for k, v in train_losses.items()},
                 **{f'epoch/val_{k}_loss': v for k, v in val_losses.items()}
             }
-            wandb.log(log_dict)
+            if wandb.run is not None: wandb.log(log_dict)
 
         if (epoch + 1) % 50 == 0 and epoch > 0:
             save_checkpoint(codec, epoch=epoch, optimizer=optimizer, config=config)

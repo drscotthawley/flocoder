@@ -578,7 +578,7 @@ class SD_VAE_Wrapper(nn.Module):
 
 
 
-def load_codec(config, device, no_natten=False):
+def setup_codec(config, device, no_natten=False, load_checkpoint=True, eval=True):
     """Load the appropriate codec model based on configuration."""
     import os
     import torch
@@ -596,10 +596,26 @@ def load_codec(config, device, no_natten=False):
 
         if hasattr(config, 'image_size') and config.image_size % 8 != 0:
             print(f"Warning: SD VAE works best with image sizes divisible by 8. Current size: {config.image_size}")
+    elif config.codec.choice == "vqgan_plus":
+        print("Loading VQGAN+ model")
+        from .vqgan_plus import VQGAN_Plus
+        codec = VQGAN_Plus(
+            in_channels=ldcfg(config, 'in_channels', 3),
+            hidden_channels=ldcfg(config, 'hidden_channels', 128),  # Note: default 128 for VQGAN+
+            num_downsamples=ldcfg(config, 'num_downsamples', 4),   # Note: default 4 for VQGAN+
+            #internal_dim=ldcfg(config, 'internal_dim', 256),
+            internal_dim=ldcfg(config, 'internal_dim', ldcfg(config, 'vq_embedding_dim', 8), supply_defaults=True), # fall back to vq_embedding_dim
+            vq_embedding_dim=ldcfg(config, 'vq_embedding_dim', 8), # Note: default 8 for VQGAN+
+            codebook_levels=ldcfg(config, 'codebook_levels', 4),
+            vq_num_embeddings=ldcfg(config, 'vq_num_embeddings', 1024), # Note: default 1024 for VQGAN+
+            commitment_weight=ldcfg(config, 'commitment_weight', 0.25),
+            use_checkpoint=not config.get('no_grad_ckpt', False),
+        ).to(device)
     else:
         # Original VQVAE path
         # Get model parameters, handle nested config structures
         # Create the VQVAE model
+        print("Loading VQVAE model")
         codec = VQVAE(
             in_channels=ldcfg(config, 'in_channels', 3),
             hidden_channels=ldcfg(config, 'hidden_channels', 256),
@@ -611,22 +627,24 @@ def load_codec(config, device, no_natten=False):
             commitment_weight=ldcfg(config, 'commitment_weight', 0.5),
             use_checkpoint=not config.get('no_grad_ckpt', False),
             no_natten=no_natten,
-        ).eval().to(device)
+        ).to(device)
 
-        # Figure out checkpoint path from different possible config structures
-        if hasattr(config, 'vqgan_checkpoint'):
-            checkpoint_path = config.vqgan_checkpoint
-        elif hasattr(config, 'codec') and hasattr(config.codec, 'checkpoint'):
-            checkpoint_path = config.codec.checkpoint
-        else:
-            raise ValueError("Could not find codec checkpoint path in config")
+        if load_checkpoint:
+            # Figure out checkpoint path from different possible config structures
+            if hasattr(config, 'vqgan_checkpoint'):
+                checkpoint_path = config.vqgan_checkpoint
+            elif hasattr(config, 'codec') and hasattr(config.codec, 'checkpoint'):
+                checkpoint_path = config.codec.checkpoint
+            else:
+                raise ValueError("Could not find codec checkpoint path in config")
+    
+            if checkpoint_path.lower() != "sd" and not os.path.exists(checkpoint_path):
+                raise FileNotFoundError(f"Codec checkpoint file {checkpoint_path} not found.")
+    
+            print(f"Loading codec checkpoint from {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+            codec.load_state_dict(checkpoint['model_state_dict'])
 
-        if checkpoint_path.lower() != "sd" and not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Codec checkpoint file {checkpoint_path} not found.")
-
-        print(f"Loading codec checkpoint from {checkpoint_path}")
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
-        codec.load_state_dict(checkpoint['model_state_dict'])
-
+    if eval: codec=code.eval()
     print("Codec model ready")
     return codec

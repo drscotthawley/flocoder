@@ -20,7 +20,7 @@ from omegaconf import DictConfig, open_dict
 from types import SimpleNamespace
 
 from flocoder.general import handle_config_path, ldcfg
-from flocoder.codecs import load_codec
+from flocoder.codecs import setup_codec
 from flocoder.data import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
 from flocoder.data import create_image_loaders, midi_transforms, image_transforms
 
@@ -180,7 +180,7 @@ def main(config) -> None:
     augs_per = ldcfg(config,'augs_per', 512)
     num_workers = ldcfg(config,'num_workers', min(int(os.cpu_count() * 0.75), 64))
     
-    codec = load_codec(config, device)
+    codec = setup_codec(config, device)
     
     # Setup dataset and output directory
     dataset = setup_dataset(data_path, image_size, config)
