@@ -183,7 +183,7 @@ def main(config) -> None:
     
     codec = setup_codec(config, device)
     
-    for split in ['train','val']: 
+    for split in ['val','train']: 
         print(f"\nWorking on split =",split)
         # Setup dataset and output directory
         dataset = setup_dataset(data_path, image_size, config, split=split)
