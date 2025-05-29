@@ -376,6 +376,7 @@ class VQVAE(nn.Module):
         self.num_downsamples = num_downsamples
         self.use_checkpoint = use_checkpoint
         self.codebook_levels = codebook_levels
+        self.vq_num_embeddings = vq_num_embeddings
         
         # Encoder with checkpointing
         encoder_layers = []
@@ -443,7 +444,14 @@ class VQVAE(nn.Module):
             vq_embedding_dim=vq_embedding_dim,
             use_checkpoint=use_checkpoint,
         )
+
+        self.init_codebook_usage()
         #----- end of init
+
+    def init_codebook_usage(self):
+        """Initialize or reset codebook usage tracking: which codebook vectors are being used?"""
+        self.register_buffer('codebook_usage', torch.zeros(self.codebook_levels, self.vq_num_embeddings))
+        self.usage_count = 0
 
 
     def encode(self, x, debug=False):
@@ -468,6 +476,12 @@ class VQVAE(nn.Module):
             'codebook_mean_dist': distances.mean().item(),
             'codebook_max_dist': distances.max().item()
         }
+
+    @torch.no_grad()
+    def get_usage_stats(self):
+        return { 'usage_counts': self.codebook_usage.cpu(),
+            'unused_vectors': (self.codebook_usage == 0).sum(dim=1).cpu(),
+            'usage_percentages': (self.codebook_usage > 0).float().mean(dim=1).cpu() }
         
     def forward(self, x, noise_strength=None, minval=0, get_stats=False):
         z = self.encode(x)
@@ -492,6 +506,12 @@ class VQVAE(nn.Module):
         x_recon = self.decode(z_q, noise_strength=noise_strength)
 
         if get_stats: # for some diagnostics
+
+            #for level, idx_tensor in enumerate(indices):
+            #    unique_indices = torch.unique(idx_tensor.flatten())
+            #    self.codebook_usage[level].index_add_(0, unique_indices, torch.ones_like(unique_indices, dtype=torch.float))
+            #self.usage_count += x.shape[0]
+
             stats = self.calc_distance_stats(z, z_q)
             return x_recon, commit_loss.mean(), stats
         else:
@@ -648,7 +668,7 @@ def setup_codec(config, device, no_natten=False, load_checkpoint=True, eval=True
             except:
                 # Fallback for checkpoints that contain config objects
                 checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-            codec.load_state_dict(checkpoint['model_state_dict'])
+            codec.load_state_dict(checkpoint['model_state_dict'], strict=False)  # strict=False so we can load old checkpoints
 
     if eval: codec=codec.eval()
     print("Codec model ready")

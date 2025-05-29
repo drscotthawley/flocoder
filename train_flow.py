@@ -3,6 +3,7 @@
 import os
 import random
 import gc
+import itertools
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -19,7 +20,7 @@ from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import setup_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset
 from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
-from flocoder.sampling import sampler, warp_time
+from flocoder.sampling import sampler, warp_time, evaluate_model
 
 
 
@@ -137,10 +138,12 @@ def train_flow(config):
 
     rolling_avg_loss, alpha = None, 0.99 
     eps = 0.001 # used in integration
-    
     for epoch in range(epochs):
         model.train()
-        pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{epochs}:')
+    
+        #short_loader = itertools.islice(train_dataloader, 10)  # Only take 10 batches  ; #temp for testing. import itertools
+        #pbar = tqdm(short_loader, desc=f'Epoch {epoch}/{epochs}:', mininterval=0.25)
+        pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{epochs}:', mininterval=0.25)
         for batch, cond in pbar:
             batch, cond = batch.to(device), cond.to(device)
             if random.random() < 0.1: cond = None # for classifier-free guidance: turn off cond signal sometimes
@@ -181,7 +184,7 @@ def train_flow(config):
                     "epoch": epoch 
                 })
             
-            pbar.set_postfix({"Loss/train":f"{loss.item():.4g}"})
+            pbar.set_postfix({"Loss/train":f"{loss.item():.4g}"}, refresh=False)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping for stability
 
             optimizer.step()
@@ -193,18 +196,17 @@ def train_flow(config):
             val_batch, val_cond = next(iter(val_dataloader))  # Fixed missing parenthesis
             # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
-            images = val_batch.cpu()  # Use validation batch for target data
             gc.collect()  # force clearing of GPU memory cache
             torch.cuda.empty_cache()
-            eval_kwargs = {'device':device, 'use_wandb': use_wandb, 'output_dir': output_dir, 'n_classes': n_classes, 
-                     'latent_shape': latent_shape, 'batch_size': 256, 'is_midi':is_midi, 'keep_gray':keep_gray}
-            sampler(model, codec, epoch, tag="val_target_data", images=images, **eval_kwargs)
-            sampler(model, codec, epoch, tag="val_", target=val_batch, target_labels=val_cond, **eval_kwargs)  # Fixed target reference
-            ema.eval()
-            sampler(model, codec, epoch, tag="val_ema_", **eval_kwargs)
-            ema.train()
+            eval_kwargs = {'method':'rk4', 'use_wandb': use_wandb, 'output_dir': output_dir,
+                           'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 256,
+                           'is_midi':is_midi, 'keep_gray':keep_gray}
+            evaluate_model(model, codec, epoch, val_batch, target_labels=val_cond, tag="", **eval_kwargs)
+            if epoch>50: # no point doing ema earlier
+                ema.eval()
+                evaluate_model(model, codec, epoch, val_batch, target_labels=val_cond, tag="ema_", **eval_kwargs)
+                ema.train()
             model.train()
-
 
         # Checkpoints
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
@@ -217,14 +219,9 @@ def train_flow(config):
         if epoch % 50 == 0 and epoch > 0:  # cheap batch size increaser. TODO: try https://github.com/ancestor-mithril/bs-scheduler
             batch_size = min(batch_size * 2, 768)
             print("Setting batch size to",batch_size,", remaking DataLoader.")
-            train_dataloader = DataLoader(
-                dataset=dataset,
+            train_dataloader = DataLoader( dataset=dataset,
                 batch_size=batch_size,  # Use the updated value
-                shuffle=True,
-                num_workers=12,
-                pin_memory=True,
-                persistent_workers=True,
-            )
+                shuffle=True, num_workers=12, pin_memory=True, persistent_workers=True,)
 
         scheduler.step()
     # end of epoch loop

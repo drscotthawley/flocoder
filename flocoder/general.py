@@ -134,6 +134,7 @@ class CosineAnnealingWarmRestartsDecay(CosineAnnealingWarmRestarts):
                             eta_min=eta_min, last_epoch=last_epoch)
         self.decay = decay
         self.initial_lrs = self.base_lrs
+        self.verbose = verbose
 
     def step(self, epoch=None):
         if epoch == None:
