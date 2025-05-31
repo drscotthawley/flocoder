@@ -28,31 +28,35 @@ from flocoder.pianoroll import img_file_2_midi_file, square_to_rect
 
 # module-level globals
 _codec = None
-_unet = None
+_vmodel = None
+_vmodel_path = None
 _config = None
 
 
 @torch.no_grad()
-def load_models_once(unet_path,    # path to saved unet checkpoint
+def load_models_once(vmodel_path,    # path to saved vmodel checkpoint
                      config,       # config object with model parameters
                      device=None,  # torch device to load models on
                      use_half=False): # whether to use half precision
     """Load models only if not already loaded or path changed"""
-    global _codec, _unet, _config
+    global _codec, _vmodel, _config
     
-    if _codec is None or _unet is None or _config != config:
+    # new info, load
+    if _codec is None or _vmodel is None or _config != config or vmodel_path != _vmodel_path: 
         print("Loading models...")
         _config = config
         if device is None: device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Load codec based on config choice - similar to how it's done in train_flow.py
+        print("Loading codec...")
         _codec = setup_codec(config, device).eval()
         
         # Handle checkpoint path
-        if not unet_path.endswith(".pt"): 
-            unet_path = f"checkpoints/{unet_path}.pt"
+        if not vmodel_path.endswith(".pt"): 
+            vmodel_path = f"checkpoints/{vmodel_path}.pt"
         
-        checkpoint = torch.load(unet_path, map_location=device)
+        print("Loading velocity model...")
+        checkpoint = torch.load(vmodel_path, map_location=device, weights_only=False)
         state_dict = checkpoint['model_state_dict']
         
         # Infer model parameters from checkpoint
@@ -63,35 +67,36 @@ def load_models_once(unet_path,    # path to saved unet checkpoint
         condition = ldcfg(config, 'condition', False)
         dim_mults = ldcfg(config, 'dim_mults', [1,2,4,4])
         
-        unet = Unet(dim=H, channels=C, dim_mults=dim_mults, 
+        vmodel = Unet(dim=H, channels=C, dim_mults=dim_mults, 
                    condition=condition, n_classes=n_classes).to(device)
         
         try:
             # First try loading with strict=False to allow parameter mismatches
-            unet.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            vmodel.load_state_dict(checkpoint['model_state_dict'], strict=False)
             print("Loaded checkpoint with non-strict parameter matching")
         except Exception as e:
-            print(f"Error loading unet: {e}")
-            raise RuntimeError("Failed to load unet checkpoint")
+            print(f"Error loading vmodel: {e}")
+            raise RuntimeError("Failed to load vmodel checkpoint")
         
-        _unet = unet.eval()
+        _vmodel = vmodel.eval()
     else:
         print("load_models_once: we've already loaded. Skipping.")
 
-    if not use_half: return _codec, _unet
+    if not use_half: 
+        return _codec, _vmodel # no half precision, return now
 
     for param in _codec.parameters():
         param.data = param.data.half()
     for buffer in _codec.buffers():
         buffer.data = buffer.data.half()
-    return _codec.half(), _unet
+    return _codec.half(), _vmodel
 
 
-def load_models(unet_path,    # path to saved unet checkpoint
+def load_models(vmodel_path,    # path to saved vmodel checkpoint
                 config,       # config object with model parameters
                 device):      # torch device to load models on
-    """Load codec and unet models - wrapper around load_models_once"""
-    return load_models_once(unet_path, config, device)
+    """Load codec and vmodel models - wrapper around load_models_once"""
+    return load_models_once(vmodel_path, config, device)
 
 
 def infer_latent_shape(config): # config object with codec parameters
@@ -102,6 +107,8 @@ def infer_latent_shape(config): # config object with codec parameters
     if codec_choice == "sd":
         # SD VAE uses 4x downsampling with 4 channels
         return (4, image_size//8, image_size//8)
+    elif codec_choice == "noop":
+        return (3, image_size, image_size)  # 3 works for RGB or my 3-channel latents
     elif codec_choice == "resize":
         # Resize codec preserves channel count and just scales dimensions
         return (3, config.get('image_size', 32), config.get('image_size', 32))
@@ -114,7 +121,7 @@ def infer_latent_shape(config): # config object with codec parameters
 
 
 @torch.no_grad()
-def generate_batch(unet,           # the flow model
+def generate_batch(vmodel,           # the flow model
                    codec,          # the codec for decoding
                    latent_shape,   # shape of latent space
                    method,         # integration method
@@ -124,15 +131,17 @@ def generate_batch(unet,           # the flow model
                    curr_batch_size): # current batch size to use
     """Generate one batch of samples"""
     shape = (curr_batch_size,) + latent_shape
+    codec, vmodel = codec.to(device), vmodel.to(device)
     
     start_time = time.time()
     print(f"\n====> HERE WE GO: Calling sampler with method = {method}, shape = {shape}")
-    latents, nfe = generate_latents(unet, shape, method, n_steps, cond=None, cfg_strength=cfg_strength)
+    latents, nfe = generate_latents(vmodel, shape, method, n_steps, cond=None, cfg_strength=cfg_strength)
     mid_time = time.time()
     print(f"\n<======  BACK FROM FLOW SAMPLER in {mid_time-start_time:.2f} seconds")
     
     print("CALLING DECODER... ====>")
-    dtype = next(codec.parameters()).dtype
+    #dtype = next(codec.parameters()).dtype
+    dtype = latents.dtype
     images = decode_latents(codec, latents.to(dtype).to(device))  # Decode to real images
     end_time = time.time()
     print(f"<======== BACK FROM DECODER in {end_time-mid_time:.2f} seconds.")
@@ -176,7 +185,7 @@ def save_sample_batch(images,        # decoded images to save
 
 
 @torch.no_grad()
-def generate_samples(unet_path,       # path to trained unet checkpoint
+def generate_samples(vmodel_path,       # path to trained vmodel checkpoint
                      config,          # config object
                      output_dir=None, # output directory (auto-generated if None)
                      n_samples=10,    # number of samples to generate
@@ -185,20 +194,20 @@ def generate_samples(unet_path,       # path to trained unet checkpoint
                      method="rk4",    # integration method
                      n_steps=10,      # number of integration steps
                      save_latents=False): # save latent images too
-    """Generate samples from trained unet. Returns paths to generated images."""
+    """Generate samples from trained vmodel. Returns paths to generated images."""
     
     device = torch.device(device if device else ("cuda" if torch.cuda.is_available() else "cpu"))
     
     # Set default output directory
     if output_dir is None: 
-        output_dir = f"output_{Path(unet_path).stem}"
+        output_dir = f"output_{Path(vmodel_path).stem}"
     print(f"output_dir = {output_dir}")
     os.makedirs(output_dir, exist_ok=True)  # Ensure output directory exists
     os.makedirs("output", exist_ok=True)  # Ensure output directory exists
     
     try:
-        codec, unet = load_models_once(unet_path, config, device)
-        codec, unet = codec.to(device), unet.to(device)
+        codec, vmodel = load_models_once(vmodel_path, config, device)
+        codec, vmodel = codec.to(device), vmodel.to(device)
     except Exception as e:
         print(f"Error loading models: {e}")
         raise
@@ -217,7 +226,7 @@ def generate_samples(unet_path,       # path to trained unet checkpoint
         print("batch_size, samples_left, curr_batch_size =", batch_size, samples_left, curr_batch_size)
         
         # Generate batch
-        images, latents, nfe = generate_batch(unet, codec, latent_shape, method, n_steps, cfg_strength, device, curr_batch_size)
+        images, latents, nfe = generate_batch(vmodel, codec, latent_shape, method, n_steps, cfg_strength, device, curr_batch_size)
         
         print("Pushing to the web interface.")
         # Save batch  
@@ -240,7 +249,7 @@ def generate_samples(unet_path,       # path to trained unet checkpoint
 
 def create_gradio_interface(config,  # config object for interface
                            codec,   # pre-loaded codec model
-                           unet):   # pre-loaded unet model
+                           vmodel):   # pre-loaded vmodel model
     """Create gradio interface for interactive generation"""
     import gradio as gr
     from midi_player import MIDIPlayer
@@ -252,25 +261,28 @@ def create_gradio_interface(config,  # config object for interface
         
         with gr.Row():
             with gr.Column():
-                unet_input = gr.Textbox(value="flow_99", label="UNet Path")
+                vmodel_input = gr.Radio(["latent", "HDiT"], value="latent", label="Model")
+                checkpoint_input = gr.Textbox(value="vmodel_best.pt", label="Checkpoint Path")
                 samples_input = gr.Slider(1, 20, value=4, step=1, label="Samples")
                 cfg_input = gr.Slider(-3, 15.0, value=3.0, step=0.1, label="CFG Strength")
                 method_input = gr.Radio(["rk4", "rk45"], value="rk4", label="Method")
                 steps_input = gr.Slider(1, 100, value=10, step=1, label="Steps")
+                device_input = gr.Radio(["cuda", "cpu"], value="cuda", label="Device")
                 generate_btn = gr.Button("Generate")
             
             with gr.Column():
                 output_gallery = gr.Gallery()
                 midi_players = gr.HTML(label=f"MIDI Players")
         
-        def show_samples(unet_path_ui, n_samples_ui, cfg_strength_ui, method_ui, steps_ui):
+        def show_samples(vmodel_input_ui, checkpoint_path_ui, n_samples_ui, cfg_strength_ui, method_ui, steps_ui, device_ui):
             # nested function called by gradio button clicker, below
             # Models are already loaded, so we can generate directly without reloading
             print(f"show_samples: Generating samples with: n_samples={n_samples_ui}, cfg_strength={cfg_strength_ui}, method={method_ui}")
             
             # Use the pre-loaded models for generation
             latent_shape = infer_latent_shape(config)
-            device = next(unet.parameters()).device
+            #device = next(vmodel.parameters()).device
+            device = torch.device(device_ui)
             
             # Generate samples directly
             all_filenames = []
@@ -279,7 +291,7 @@ def create_gradio_interface(config,  # config object for interface
             
             while samples_left > 0:
                 curr_batch_size = min(batch_size, samples_left)
-                images, latents, nfe = generate_batch(unet, codec, latent_shape, method_ui, steps_ui, cfg_strength_ui, device, curr_batch_size)
+                images, latents, nfe = generate_batch(vmodel, codec, latent_shape, method_ui, steps_ui, cfg_strength_ui, device, curr_batch_size)
                 
                 tag = f"gradio_batch_{len(all_filenames)}_"
                 files = save_sample_batch(images[:curr_batch_size], latents[:curr_batch_size], 
@@ -327,7 +339,7 @@ def create_gradio_interface(config,  # config object for interface
             return result_images, all_midi_html
         
         generate_btn.click(show_samples, 
-                          [unet_input, samples_input, cfg_input, method_input, steps_input], 
+                          [vmodel_input, checkpoint_input, samples_input, cfg_input, method_input, steps_input, device_input], 
                           [output_gallery,midi_players])
     
     return app
@@ -340,7 +352,7 @@ def main(config: DictConfig) -> None:
     print(f"Config: {OmegaConf.to_yaml(config)}")
     
     # Extract parameters from the config - these will likely just yield the defaults
-    unet_path = config.get("unet_path", "flow_99")
+    vmodel_path = config.get("vmodel_path", "vmodel_best")
     n_samples = config.get("n_samples", 100)
     method = config.get("method", "rk4")
     output_dir = config.get("output_dir", None)
@@ -349,12 +361,13 @@ def main(config: DictConfig) -> None:
     device = config.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     
     if use_gradio:
-        codec, unet = load_models_once(unet_path, config, device=device)
-        app = create_gradio_interface(config, codec, unet)
+        codec, vmodel = load_models_once(vmodel_path, config, device=device)
+        app = create_gradio_interface(config, codec, vmodel)
         app.launch(share=False)  # Launch the app
+        #app.queue().launch( share=True) # , prevent_thread_lock=True)
     else:
         # Normal operation - generate samples using the provided config
-        filenames = generate_samples(unet_path, config, output_dir=output_dir, 
+        filenames = generate_samples(vmodel_path, config, output_dir=output_dir, 
                                    n_samples=n_samples, device=device, method=method, 
                                    save_latents=save_latents)
         print(f"Generated {len(filenames)} files")

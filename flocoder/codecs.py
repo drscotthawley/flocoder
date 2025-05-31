@@ -523,7 +523,7 @@ class SimpleResizeAE(nn.Module):
     """Just resizes tensors using bilinear interpolation. 
     For testing/exploration - reconstructions will be blocky/blurry."""
     def __init__(self, 
-                 latent_shape=(4,16,16), # tuple for latent dimensions
+                 latent_shape=(4,16,16), # tuple for latent dimensions. None for no-op/passthrough
                  mode='bicubic',         # interpolation/resampling mode
                  ): 
         super().__init__()
@@ -535,7 +535,7 @@ class SimpleResizeAE(nn.Module):
         """Resize input to latent_size using interpolation. 
         any extra latent channels are just copies of the mean"""
         self.orig_shape = x.shape[1:]   # save orig shape for later decode
-        if self.latent_shape is None: 
+        if self.latent_shape is None or self.orig_shape==self.latent_shape: 
             return x   # No-Op! 
         c, h, w = self.latent_shape
         small = F.interpolate(x, size=(h, w), mode=self.mode, align_corners=False)
@@ -548,7 +548,7 @@ class SimpleResizeAE(nn.Module):
     def decode(self, z, orig_shape=None, noise_strength=0.0): # noise_strength unused, for API compatibility
         """Resize latent back to original dimensions."""
         target_shape = orig_shape if orig_shape is not None else self.orig_shape
-        if target_shape is None or target_shape==self.latent_shape: return z    # No-op
+        if self.latent_shape is None or target_shape is None or target_shape==self.latent_shape: return z    # No-op
         h, w = (target_shape[-2], target_shape[-1]) 
         # Only use the first 3 channels for decoding; any extras are 
         return F.interpolate(z[:,:3], size=(h, w), mode=self.mode, align_corners=False)
@@ -561,6 +561,12 @@ class SimpleResizeAE(nn.Module):
         if get_stats: return recon, 0.0, {'codebook_mean_dist': 0.0, 'codebook_max_dist': 0.0}
         return recon, 0.0
 
+
+class NoOpAE(SimpleResizeAE): 
+    """easy wrapper for for "no autoencoder"; keeps rest of code the same"""
+    def __init__(self,):
+        self.latent_shape = None
+        super().__init__()
 
 
 
@@ -604,10 +610,12 @@ def setup_codec(config, device, no_natten=False, load_checkpoint=True, eval=True
     import torch
     from types import SimpleNamespace
 
-    if config.codec.choice == "resize":
+    if config.codec.choice is None or config.codec.choice == "noop":
+        print("Using NoOpAE")
+        codec = NoOpAE().eval().to(device)
+    elif config.codec.choice == "resize":
         print("Using SimpleResizeAE")
         codec = SimpleResizeAE(latent_shape=config.codec.get('latent_shape', (4, 16, 16))).eval().to(device)
-
     elif config.codec.choice == "sd":
         print("Loading SD VAE via SD_VAE_Wrapper")
         codec = SD_VAE_Wrapper(
@@ -632,11 +640,8 @@ def setup_codec(config, device, no_natten=False, load_checkpoint=True, eval=True
             use_checkpoint=not config.get('no_grad_ckpt', False),
         ).to(device)
     else:
-        # Original VQVAE path
-        # Get model parameters, handle nested config structures
-        # Create the VQVAE model
         print("Loading VQVAE model")
-        codec = VQVAE(
+        codec = VQVAE(         # My "Original" VQVAE 
             in_channels=ldcfg(config, 'in_channels', 3),
             hidden_channels=ldcfg(config, 'hidden_channels', 256),
             num_downsamples=ldcfg(config, 'num_downsamples', 3),

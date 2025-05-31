@@ -127,7 +127,10 @@ def decode_latents(codec,          # the codec/autoencoder model
                    is_midi=False,  # whether this is MIDI data
                    keep_gray=False): # keep grayscale format for MIDI
     """Decode latents to images"""
-    device = next(codec.parameters()).device
+    try:
+        device = next(codec.parameters()).device
+    except: 
+        device = latents.device
     decoded = codec.decode(latents.to(device))
     return g2rgb(decoded, keep_gray=keep_gray) if is_midi else decoded
 
