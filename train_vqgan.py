@@ -26,7 +26,8 @@ use_fused_na()
 
 from flocoder.data import create_image_loaders
 from flocoder.codecs import VQVAE, setup_codec
-from flocoder.viz import viz_codebooks, denormalize
+from flocoder.viz import denormalize
+from flocoder.codebook_analysis import create_empty_counts, update_usage_counts, calc_usage_stats, plot_usage_histograms, plot_combo_usage_map, viz_codebook_vectors
 from flocoder.metrics import *  # there's a lot
 from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 
@@ -125,6 +126,9 @@ def train_vqgan(config):
         # commitment_weight = ldcfg(config,'commitment_weight', 0.25),
         # use_checkpoint    = not ldcfg(config,'no_grad_ckpt', False),
     # ).to(device)
+    train_level_counts, train_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4))
+    val_level_counts, val_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4))
+    cb_size = ldcfg(config, 'vq_num_embeddings', 48)
 
     optimizer = optim.Adam(codec.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = None
@@ -188,6 +192,12 @@ def train_vqgan(config):
             # Pre-warmup training
             if epoch < warmup_epochs:
                 recon, vq_loss = codec(source_imgs)
+                if hasattr(codec, 'indices'):
+                    #print(f"Found indices with shape: {codec.indices.shape}")
+                    #print(f"Indices sample: {codec.indices[0, :5] if codec.indices.numel() > 0 else 'empty'}")
+                    train_level_counts, train_combos = update_usage_counts(codec.indices, train_level_counts, train_combos)
+                else:
+                    pass#print("No indices attribute found on codec")
   
                 losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
                                         adv_loss=None, epoch=epoch, config=config)
@@ -202,6 +212,8 @@ def train_vqgan(config):
             else:
                 # Train discriminator
                 recon, vq_loss = codec(source_imgs, noise_strength=noise_strength)
+                if hasattr(codec, 'indices'):
+                    train_level_counts, train_combos = update_usage_counts(codec.indices, train_level_counts, train_combos)
                 d_losses, d_stats_list, grad_stats_list = [], [], []
                 
                 for _ in range(1):
@@ -221,7 +233,7 @@ def train_vqgan(config):
 
                 # Train generator
                 if batch_idx % 1 == 0:
-                    recon, vq_loss = codec(source_imgs, noise_strength=noise_strength)
+                    #recon, vq_loss = codec(source_imgs, noise_strength=noise_strength) # already computed above
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg, 
                                             adv_loss=adv_loss, epoch=epoch, config=config)
 
@@ -271,6 +283,8 @@ def train_vqgan(config):
 
                     # Basic validation forward pass
                     recon, vq_loss, dist_stats = codec(source_imgs, get_stats=True)
+                    if hasattr(codec, 'indices'):
+                       val_level_counts, val_combos = update_usage_counts(codec.indices, train_level_counts, train_combos, val_level_counts, val_combos, is_validation=True)
                     losses = compute_vqgan_losses(recon, target_imgs, vq_loss, vgg,
                                             adv_loss=adv_loss, epoch=epoch, config=config)
                     losses['total'] = get_total_vqgan_loss(losses, config)
@@ -312,7 +326,16 @@ def train_vqgan(config):
         val_losses = {k: v / val_total_batches for k, v in val_losses.items()}
 
         if epoch < 10 or epoch % max(1, int(epoch ** 0.5)) == 0:
-            viz_codebooks(codec, epoch, no_wandb=no_wandb)
+            viz_codebook_vectors(codec, epoch, no_wandb=no_wandb)
+
+        if epoch % 10 == 0: # accumulate codebook usage over 10-epoch windows (include epoch 0 just for quick debugging) 
+            usage_stats = calc_usage_stats(train_level_counts, train_combos, val_level_counts, val_combos, cb_size)
+            if not no_wandb: wandb.log({f'codebook/{k}': v for k, v in usage_stats.items()})
+            plot_usage_histograms(train_level_counts, val_level_counts, cb_size, epoch, use_wandb=not no_wandb)
+            plot_combo_usage_map(train_combos, val_combos, epoch, cb_size, use_wandb=not no_wandb)
+            # reset counts for next accumulation
+            train_level_counts, train_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4)) 
+            val_level_counts, val_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4))
 
         # Log epoch metrics
         if not no_wandb:
@@ -348,5 +371,6 @@ def main(config):
     return "Training complete"
 
 if __name__ == "__main__":
+    print("\nScript invoked via:\n", " ".join(sys.argv),"\n")
     main()
 
