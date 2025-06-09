@@ -135,9 +135,10 @@ def plot_combo_usage_map(train_combos,  # defaultdict for train combination coun
                     combo_matrix[i, j] = 2  # val only
     
     # Create figure with 3 subplots, with unequal subplot widths
-    fig = plt.figure(figsize=(18, 6))
-    gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1.3, 1.3])  # Give extra width to 2nd and 3rd plots
-    axs = [fig.add_subplot(gs[i]) for i in range(3)]
+    fig = plt.figure(figsize=(18, 10))
+    gs = gridspec.GridSpec(2, 3, width_ratios=[1, 1.3, 1.3])  # Give extra width to 2nd and 3rd plots
+    axs = [fig.add_subplot(gs[i//3, i%3]) for i in range(6)]
+
     
     # Set common labels for all plots
     for ax in axs:
@@ -171,6 +172,18 @@ def plot_combo_usage_map(train_combos,  # defaultdict for train combination coun
     im3 = axs[2].imshow(val_freq_matrix.T, cmap='Reds', origin='lower')
     axs[2].set_title('Val Frequency')
     plt.colorbar(im3, ax=axs[2], label='Usage Count',shrink=0.6)
+
+    axs[3].set_visible(False) # bottom left: unused
+
+    # bottom Middle plot: Train frequency heatmap = log scale
+    im4 = axs[4].imshow(np.log10(1+train_freq_matrix).T, cmap='Blues', origin='lower')
+    axs[4].set_title('Train Frequency')
+    plt.colorbar(im4, ax=axs[4], label='log10( 1 + Usage Count )',shrink=0.6)
+    
+    # bottom Right plot: Val frequency heatmap   = log scale
+    im5 = axs[5].imshow(np.log10(1+val_freq_matrix).T, cmap='Reds', origin='lower')
+    axs[5].set_title('Val Frequency')
+    plt.colorbar(im5, ax=axs[5], label='log10( 1 + Usage Count ) ',shrink=0.6)
     
     plt.suptitle(f'Codebook Combinations (Epoch {epoch})')
     plt.tight_layout()
@@ -231,4 +244,66 @@ def viz_codebook_vectors(model,        # RVQ model with codebooks
             wandb.log({'codebook/histograms': wandb.Image(tmpfile.name, 
                 caption=f'Epoch {epoch} - Histograms of RVQ Codebook Vectors')})
     plt.close()
+
+
+
+def plot_quantized_3d_scatter(train_combos,  # defaultdict for train combination counts
+                              val_combos,    # defaultdict for val combination counts
+                              codec,         # RVQ model with codebooks
+                              epoch,         # current epoch number
+                              use_wandb=True): # whether to log to wandb
+    """Plot 3D scatter of quantized vectors in embedding space"""
+    import plotly.graph_objects as go
+    import numpy as np
+
+    codebook_vectors = [codebook.detach().cpu().numpy() for codebook in codec.vq.codebooks]
+
+    fig = go.Figure()
+    for dsi, combos in enumerate([train_combos, val_combos]):
+        points, counts = [], []
+        for combo, count in combos.items():
+            if len(combo) == 2:
+                i, j = combo
+                if i < len(codebook_vectors[0]) and j < len(codebook_vectors[1]):
+                    true_vector = codebook_vectors[0][i] + codebook_vectors[1][j]
+                    points.append(true_vector)
+                    counts.append(count)
+
+        if points:
+            points = np.array(points)
+            name, color = ('Train', 'blue') if dsi == 0 else ('Val', 'red')
+            fig.add_trace(go.Scatter3d(x=points[:,0], y=points[:,1], z=points[:,2], mode='markers',
+                marker=dict(color=color, size=5, opacity=0.7), name=name, text=[f'Count: {c}' for c in counts],
+                hovertemplate=f'<b>{name}</b><br>X: %{{x:.3f}}<br>Y: %{{y:.3f}}<br>Z: %{{z:.3f}}<br>%{{text}}<extra></extra>'))
+        else:
+            print("\nplot_quantized_3d_scatter: No points, dsi=",dsi)
+
+    fig.update_layout(title=f'Quantized Vectors in 3D Space (Epoch {epoch})',
+        scene=dict(xaxis_title='Embedding Dim 0', yaxis_title='Embedding Dim 1', zaxis_title='Embedding Dim 2',
+                   camera=dict(eye=dict(x=1.5, y=1.5, z=1.5))), width=800, height=800)
+
+    if use_wandb: 
+        #wandb.log({'codebook/3d_scatter': wandb.Plotly(fig)})
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix='.html', delete=False) as tmp:
+            fig.write_html(tmp.name)
+            wandb.log({'codebook/3d_scatter': wandb.Html(tmp.name)})
+
+
+
+##MAIN WRAPPER ROUTINE
+def analyze_codebooks(train_level_counts, # list of defaultdicts for train counts per level
+                     train_combos,       # defaultdict for train combination counts  
+                     val_level_counts,   # list of defaultdicts for val counts per level
+                     val_combos,         # defaultdict for val combination counts
+                     codebook_size,      # size of each codebook level
+                     model,              # RVQ model with codebooks
+                     epoch,              # current epoch number
+                     use_wandb=True):    # whether to log to wandb
+    """Run complete codebook analysis: stats, histograms, usage maps, and 3D scatter"""
+    usage_stats = calc_usage_stats(train_level_counts, train_combos, val_level_counts, val_combos, codebook_size)
+    if use_wandb: wandb.log({f'codebook/{k}': v for k, v in usage_stats.items()})
+    plot_usage_histograms(train_level_counts, val_level_counts, codebook_size, epoch, use_wandb)
+    plot_combo_usage_map(train_combos, val_combos, epoch, codebook_size, use_wandb)
+    plot_quantized_3d_scatter(train_combos, val_combos, model, epoch, use_wandb)
 

@@ -27,7 +27,7 @@ use_fused_na()
 from flocoder.data import create_image_loaders
 from flocoder.codecs import VQVAE, setup_codec
 from flocoder.viz import denormalize
-from flocoder.codebook_analysis import create_empty_counts, update_usage_counts, calc_usage_stats, plot_usage_histograms, plot_combo_usage_map, viz_codebook_vectors
+from flocoder.codebook_analysis import create_empty_counts, update_usage_counts, viz_codebook_vectors, analyze_codebooks
 from flocoder.metrics import *  # there's a lot
 from flocoder.general import load_model_checkpoint, save_checkpoint, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 
@@ -126,9 +126,10 @@ def train_vqgan(config):
         # commitment_weight = ldcfg(config,'commitment_weight', 0.25),
         # use_checkpoint    = not ldcfg(config,'no_grad_ckpt', False),
     # ).to(device)
-    train_level_counts, train_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4))
-    val_level_counts, val_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4))
+    cb_levels = ldcfg(config, 'codebook_levels', 4)
     cb_size = ldcfg(config, 'vq_num_embeddings', 48)
+    train_level_counts, train_combos = create_empty_counts(cb_levels)
+    val_level_counts, val_combos = create_empty_counts(cb_levels)
 
     optimizer = optim.Adam(codec.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = None
@@ -329,13 +330,10 @@ def train_vqgan(config):
             viz_codebook_vectors(codec, epoch, no_wandb=no_wandb)
 
         if epoch % 10 == 0: # accumulate codebook usage over 10-epoch windows (include epoch 0 just for quick debugging) 
-            usage_stats = calc_usage_stats(train_level_counts, train_combos, val_level_counts, val_combos, cb_size)
-            if not no_wandb: wandb.log({f'codebook/{k}': v for k, v in usage_stats.items()})
-            plot_usage_histograms(train_level_counts, val_level_counts, cb_size, epoch, use_wandb=not no_wandb)
-            plot_combo_usage_map(train_combos, val_combos, epoch, cb_size, use_wandb=not no_wandb)
+            analyze_codebooks(train_level_counts, train_combos, val_level_counts, val_combos, cb_size, codec, epoch, use_wandb=not no_wandb)
             # reset counts for next accumulation
-            train_level_counts, train_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4)) 
-            val_level_counts, val_combos = create_empty_counts(ldcfg(config, 'codebook_levels', 4))
+            train_level_counts, train_combos = create_empty_counts(cb_levels)
+            val_level_counts, val_combos = create_empty_counts(cb_levels)
 
         # Log epoch metrics
         if not no_wandb:
