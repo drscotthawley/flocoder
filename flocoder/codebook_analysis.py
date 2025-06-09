@@ -2,6 +2,7 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import wandb
 from collections import defaultdict
 import tempfile
@@ -104,44 +105,54 @@ def plot_usage_histograms(train_level_counts, # list of defaultdicts for train c
 
 
 def plot_combo_usage_map(train_combos,  # defaultdict for train combination counts
-                           val_combos,      # defaultdict for val combination counts
-                           epoch,           # current epoch number
-                           codebook_size,   # size of each codebook level
-                           use_wandb=True): # whether to log to wandb
-    """Plot 2D usage map of codebook combinations with overlap visualization"""
-    # Create matrix: 0=unused, 1=train_only, 2=val_only, 3=both
+                         val_combos,      # defaultdict for val combination counts
+                         epoch,           # current epoch number
+                         codebook_size,   # size of each codebook level
+                         use_wandb=True): # whether to log to wandb
+    """Plot 3-panel codebook combinations: categorical usage + train frequency + val frequency"""
+    # Create categorical matrix: 0=unused, 1=train_only, 2=val_only, 3=both
     combo_matrix = np.zeros((codebook_size, codebook_size), dtype=int)
+    train_freq_matrix = np.zeros((codebook_size, codebook_size), dtype=float)
+    val_freq_matrix = np.zeros((codebook_size, codebook_size), dtype=float)
     
-    # Mark train combinations
-    for combo in train_combos.keys():
+    # Mark train combinations and frequencies
+    for combo, count in train_combos.items():
         if len(combo) == 2:  # only for 2-level RVQ
             i, j = combo
             if 0 <= i < codebook_size and 0 <= j < codebook_size:
                 combo_matrix[i, j] = 1  # train only
+                train_freq_matrix[i, j] = count
     
-    # Mark val combinations (override train-only, set both)
-    for combo in val_combos.keys():
+    # Mark val combinations and frequencies (override train-only, set both)
+    for combo, count in val_combos.items():
         if len(combo) == 2:
             i, j = combo
             if 0 <= i < codebook_size and 0 <= j < codebook_size:
+                val_freq_matrix[i, j] = count
                 if combo_matrix[i, j] == 1:
                     combo_matrix[i, j] = 3  # both train and val
                 else:
                     combo_matrix[i, j] = 2  # val only
     
-    # Create custom colormap: white=unused, blue=train, red=val, purple=both
+    # Create figure with 3 subplots, with unequal subplot widths
+    fig = plt.figure(figsize=(18, 6))
+    gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1.3, 1.3])  # Give extra width to 2nd and 3rd plots
+    axs = [fig.add_subplot(gs[i]) for i in range(3)]
+    
+    # Set common labels for all plots
+    for ax in axs:
+        ax.set_xlabel('Level 0 Codebook Index')
+        ax.set_ylabel('Level 1 Codebook Index')
+    
+    # Left plot: Categorical usage map
     from matplotlib.colors import ListedColormap
     colors = ['white', 'blue', 'red', 'purple']
-    cmap = ListedColormap(colors)
+    cmap_cat = ListedColormap(colors)
     
-    fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-    im = ax.imshow(combo_matrix.T, cmap=cmap, vmin=0, vmax=3, origin='lower') # transpose b/c numpy 
+    im1 = axs[0].imshow(combo_matrix.T, cmap=cmap_cat, vmin=0, vmax=3, origin='lower')
+    axs[0].set_title('Usage Categories')
     
-    ax.set_xlabel('Level 0 Codebook Index')
-    ax.set_ylabel('Level 1 Codebook Index') 
-    ax.set_title(f'Codebook Combinations (Epoch {epoch})')
-    
-    # Create custom legend
+    # Custom legend for categorical plot
     from matplotlib.patches import Patch
     legend_elements = [
         Patch(facecolor='white', edgecolor='black', label='Unused'),
@@ -149,15 +160,26 @@ def plot_combo_usage_map(train_combos,  # defaultdict for train combination coun
         Patch(facecolor='red', label='Val only'), 
         Patch(facecolor='purple', label='Both')
     ]
-    ax.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5))
+    axs[0].legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5))
     
+    # Middle plot: Train frequency heatmap
+    im2 = axs[1].imshow(train_freq_matrix.T, cmap='Blues', origin='lower')
+    axs[1].set_title('Train Frequency')
+    plt.colorbar(im2, ax=axs[1], label='Usage Count',shrink=0.6)
+    
+    # Right plot: Val frequency heatmap  
+    im3 = axs[2].imshow(val_freq_matrix.T, cmap='Reds', origin='lower')
+    axs[2].set_title('Val Frequency')
+    plt.colorbar(im3, ax=axs[2], label='Usage Count',shrink=0.6)
+    
+    plt.suptitle(f'Codebook Combinations (Epoch {epoch})')
     plt.tight_layout()
     
     if use_wandb:
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
             plt.savefig(tmpfile.name, format='png', bbox_inches='tight')
-            wandb.log({'codebook/combination_usage': wandb.Image(tmpfile.name,
-                caption=f'Epoch {epoch} - Codebook Combinations (Blue=Train, Red=Val, Purple=Both)')})
+            wandb.log({'codebook/combination_usage_map': wandb.Image(tmpfile.name,
+                caption=f'Epoch {epoch} - Usage Categories + Train/Val Frequencies')})
     plt.close()
 
 
