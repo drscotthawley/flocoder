@@ -135,10 +135,10 @@ def plot_combo_usage_map(train_combos,  # defaultdict for train combination coun
     cmap = ListedColormap(colors)
     
     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-    im = ax.imshow(combo_matrix, cmap=cmap, vmin=0, vmax=3, origin='lower')
+    im = ax.imshow(combo_matrix.T, cmap=cmap, vmin=0, vmax=3, origin='lower') # transpose b/c numpy 
     
-    ax.set_xlabel('Level 1 Codebook Index')
-    ax.set_ylabel('Level 0 Codebook Index') 
+    ax.set_xlabel('Level 0 Codebook Index')
+    ax.set_ylabel('Level 1 Codebook Index') 
     ax.set_title(f'Codebook Combinations (Epoch {epoch})')
     
     # Create custom legend
