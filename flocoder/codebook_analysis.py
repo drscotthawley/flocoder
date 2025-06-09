@@ -108,7 +108,7 @@ def plot_combo_usage_map(train_combos,  # defaultdict for train combination coun
                            epoch,           # current epoch number
                            codebook_size,   # size of each codebook level
                            use_wandb=True): # whether to log to wandb
-    """Plot 2D heatmap of codebook combinations with overlap visualization"""
+    """Plot 2D usage map of codebook combinations with overlap visualization"""
     # Create matrix: 0=unused, 1=train_only, 2=val_only, 3=both
     combo_matrix = np.zeros((codebook_size, codebook_size), dtype=int)
     
@@ -156,7 +156,7 @@ def plot_combo_usage_map(train_combos,  # defaultdict for train combination coun
     if use_wandb:
         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
             plt.savefig(tmpfile.name, format='png', bbox_inches='tight')
-            wandb.log({'codebook/combination_heatmap': wandb.Image(tmpfile.name,
+            wandb.log({'codebook/combination_usage': wandb.Image(tmpfile.name,
                 caption=f'Epoch {epoch} - Codebook Combinations (Blue=Train, Red=Val, Purple=Both)')})
     plt.close()
 
