@@ -120,28 +120,29 @@ def plot_usage_histograms(data_dict,      # {name: (level_counts, combinations)}
     """Create overlaid histograms for each codebook level"""
     names = list(data_dict.keys())
     colors = ['blue', 'red', 'green', 'orange', 'purple'][:len(names)]
+
     num_levels = len(data_dict[names[0]][0])
     
     fig, axes = plt.subplots(num_levels, 1, figsize=(12, 4*num_levels))
     if num_levels == 1: axes = [axes]
+    alpha = 0.85
     
     for level in range(num_levels):
         ax = axes[level]
         all_indices = range(codebook_size)
         for i, (name, (level_counts, _)) in enumerate(data_dict.items()):
+            if debug: print("plot_usage_histograms: name = ",name,"color = ",colors[i])
             freqs = [level_counts[level].get(idx, 0) for idx in all_indices]
-            ax.bar(all_indices, freqs, alpha=0.7, label=name, color=colors[i])
+            ax.bar(all_indices, freqs, alpha=alpha, label=name, color=colors[i])
         
         ax.set_title(f'Level {level} Codebook Usage (Epoch {epoch})')
         ax.set_xlabel('Codebook Index')
         ax.set_ylabel('Usage Count')
         if len(names) == 2:
             from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor=colors[0], alpha=0.7, label=names[0]),
-                Patch(facecolor=colors[1], alpha=0.7, label=names[1]),
-                Patch(facecolor='purple', alpha=0.7, label='Overlap')
-            ]
+            legend_elements = [ Patch(facecolor=colors[0], alpha=alpha, label=names[0]+' only'),
+                                Patch(facecolor=colors[1], alpha=alpha, label=names[1]+' only'),
+                                Patch(facecolor='#c9164cff', alpha=alpha, label='Overlap')] # TODO: every color-picker yield wrong color??
             ax.legend(handles=legend_elements)
         else:
             ax.legend()
