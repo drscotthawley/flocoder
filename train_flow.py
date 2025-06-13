@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
 import os
+import sys
 import random
 import gc
 import itertools
@@ -18,10 +19,14 @@ use_fused_na()
 
 from flocoder.unet import Unet, MRUnet
 from flocoder.codecs import setup_codec
-from flocoder.data import PreEncodedDataset, InfiniteDataset
+from flocoder.data import PreEncodedDataset, InfiniteDataset, create_image_loaders
 from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 from flocoder.sampling import sampler, warp_time, evaluate_model
+from flocoder.hdit import ImageTransformerDenoiserModelV2, LevelSpec, MappingSpec, GlobalAttentionSpec
+from flocoder.codebook_analysis import CodebookUsageTracker
 
+
+print("Imports successful!") 
 
 
 class EMA:
@@ -94,17 +99,29 @@ def train_flow(config):
     train_path, val_path = f"{data_path}/train",  f"{data_path}/val"
 
     print(f"Loading train data from: {train_path}")
-    train_dataset = PreEncodedDataset(train_path, n_classes=n_classes)
-    train_dataloader = DataLoader( dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
-            pin_memory=True, persistent_workers=True,)
-    dataset, dataloader = train_dataset, train_dataloader # aliases to avoid errors later
+    pre_encoded=True 
+    if pre_encoded:
+        train_dataset = PreEncodedDataset(train_path, n_classes=n_classes)
+        train_dataloader = DataLoader( dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
+                pin_memory=True, persistent_workers=True,)
+        dataset, dataloader = train_dataset, train_dataloader # aliases to avoid errors later
+    
+        print(f"Loading val data from: {val_path}")
+        val_dataset = PreEncodedDataset(val_path, n_classes=n_classes)
+        val_dataloader = DataLoader( dataset=val_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
+                pin_memory=True, persistent_workers=True,)
 
-    print(f"Loading val data from: {val_path}")
-    val_dataset = PreEncodedDataset(val_path, n_classes=n_classes)
-    val_dataloader = DataLoader( dataset=val_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
-            pin_memory=True, persistent_workers=True,)
+        sample_item, _ = dataset[0]
+    else: 
+        image_size = ldcfg(config, 'image_size', 128)
+        num_workers = ldcfg(config,'num_workers', 16)
+        is_midi = True
+        train_dataloader, val_dataloader = create_image_loaders( batch_size=batch_size, image_size=image_size, 
+                data_path=data_path, num_workers=num_workers, is_midi=is_midi, config=config)
+        batch = next(iter(train_dataloader))
+        source_imgs, _, target_imgs, _b = batch
+        sample_item = source_imgs[0]
 
-    sample_item, _ = dataset[0]
     latent_shape = tuple(sample_item.shape)
     C, H, W = latent_shape
     print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
@@ -119,16 +136,43 @@ def train_flow(config):
     print("device =", device)
 
     codec = setup_codec(config, device).eval() # Load codec for inference/evaluation
+    # variables for tracking codebook usage
+    cb_levels = ldcfg(config, 'codebook_levels', 4)
+    cb_size = ldcfg(config, 'vq_num_embeddings', 32)
+    cb_tracker = CodebookUsageTracker(num_levels=cb_levels, codebook_size=cb_size)
 
-    # Create flow model
+    # Create flow model 
     dim_mults = ldcfg(config,'dim_mults', [1,2,4,4], verbose=True)
-    model = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
+    if pre_encoded: # usually we want this
+        model = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
+    else:  # added to test HDiT
+        levels = [
+            LevelSpec(depth=2, width=256, d_ff=768, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0),
+            LevelSpec(depth=4, width=512, d_ff=1536, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0),
+        ]
+        mapping = MappingSpec(depth=2, width=256, d_ff=768, dropout=0.0)
+        print("model is ImageTransformerDenoiserModelV2")
+        model = ImageTransformerDenoiserModelV2(
+            levels=levels,  # List of LevelSpec objects
+            mapping=mapping,  # MappingSpec object
+            in_channels=C,
+            out_channels=C,
+            patch_size=(4, 4),  # or (2, 2) for smaller images
+            num_classes=n_classes if n_classes else 0,
+            mapping_cond_dim=0  # unless you have extra conditioning
+        )
+    model = model.to(device)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Model params: {total/1e9:.1f}B" if total >= 1e9 else f"Model params: {total/1e6:.1f}M")
     print(f"Model conditioning enabled: {hasattr(model, 'condition') and model.condition}")
     print(f"Model has cond_mlp: {hasattr(model, 'cond_mlp')}")
+    print("")
+
 
     loss_fn = torch.nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
+    #scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
+    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=200, T_mult=2, decay=0.3) 
 
     use_wandb = not no_wandb
     if use_wandb: 
@@ -144,8 +188,14 @@ def train_flow(config):
         #short_loader = itertools.islice(train_dataloader, 10)  # Only take 10 batches  ; #temp for testing. import itertools
         #pbar = tqdm(short_loader, desc=f'Epoch {epoch}/{epochs}:', mininterval=0.25)
         pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{epochs}:', mininterval=0.25)
-        for batch, cond in pbar:
+        for batch in pbar:
+            if pre_encoded: 
+                batch, cond = batch
+            else: 
+                _, _a, batch, cond = batch 
+
             batch, cond = batch.to(device), cond.to(device)
+            cond=None # TODO: this is hard-coded for MIDI data right now. fix this and make it adaptive, re. using config.conditioned
             if random.random() < 0.1: cond = None # for classifier-free guidance: turn off cond signal sometimes
             target = batch # alias
 
@@ -159,7 +209,9 @@ def train_flow(config):
             x = t_expand * target + (1 - t_expand) * source
 
             v_guess = target - source    # constant velocity
-            v_model = model(x, t * 999, cond)
+            t_scale = 999 if not pre_encoded else 1
+            #v_model = model(x, t * t_scale, aug_cond=None, class_cond=cond) for use with HDiT 
+            v_model = model(x, t * t_scale, cond=cond)
             loss = loss_fn(v_model, v_guess)
         
             if hasattr(model,'shrinker'):  # optional: if multiresolution UNet is available
@@ -191,22 +243,33 @@ def train_flow(config):
             ema.update()
 
         # Evals / Metrics / Viz
-        if (epoch < 10 and epoch % 1 == 0) or (epoch >= 10 and ((epoch + 1) % 10 == 0)):
+        if (epoch < 20 ) or (epoch >= 20 and ((epoch + 1) % 10 == 0)):
             model.eval()
-            val_batch, val_cond = next(iter(val_dataloader))  # Fixed missing parenthesis
+            val_batch = next(iter(val_dataloader))  # Fixed missing parenthesis
+            if len(val_batch)>2: 
+                _, _a, val_batch, val_cond = val_batch
+            else:
+                val_batch, val_cond = val_batch
+
+            val_batch, val_cond = val_batch.to(device), val_cond.to(device)
+
             # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
-            gc.collect()  # force clearing of GPU memory cache
-            torch.cuda.empty_cache()
-            eval_kwargs = {'method':'rk4', 'use_wandb': use_wandb, 'output_dir': output_dir,
-                           'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 256,
-                           'is_midi':is_midi, 'keep_gray':keep_gray}
-            evaluate_model(model, codec, epoch, val_batch, target_labels=val_cond, tag="", **eval_kwargs)
+            eval_kwargs = {
+                'method':'rk4', 'use_wandb': use_wandb, 'output_dir': output_dir,
+                'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 768,
+                'is_midi':is_midi, 'keep_gray':keep_gray,
+                'pre_encoded': pre_encoded
+            }
+            metrics = evaluate_model( model, codec, epoch, val_batch, target_labels=val_cond, tag="", cb_tracker=cb_tracker, **eval_kwargs)
+
             if epoch>50: # no point doing ema earlier
                 ema.eval()
                 evaluate_model(model, codec, epoch, val_batch, target_labels=val_cond, tag="ema_", **eval_kwargs)
                 ema.train()
             model.train()
+
+            if epoch % 5 == 0: cb_tracker.reset_all()  # accumulate codebook usage info over 5 epochs
 
         # Checkpoints
         if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
@@ -216,8 +279,8 @@ def train_flow(config):
             ema.train()  # Switch back to regular weights
             keep_recent_files(100, directory=output_dir, pattern="*.png") # not too many image outputs
 
-        if epoch % 50 == 0 and epoch > 0:  # cheap batch size increaser. TODO: try https://github.com/ancestor-mithril/bs-scheduler
-            batch_size = min(batch_size * 2, 768)
+        if False and epoch % 50 == 0 and epoch > 0:  # cheap batch size increaser. TODO: try https://github.com/ancestor-mithril/bs-scheduler
+            batch_size = min(batch_size * 2, 12000) # increase batch size
             print("Setting batch size to",batch_size,", remaking DataLoader.")
             train_dataloader = DataLoader( dataset=dataset,
                 batch_size=batch_size,  # Use the updated value
