@@ -33,7 +33,7 @@ dependencies = [
     "scipy>=1.15.3",
     "geomloss",
     "plotly",
-    "natten",
+    "natten>=0.20.1",
 ]
 
 [project.optional-dependencies]
