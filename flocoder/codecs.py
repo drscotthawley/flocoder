@@ -111,7 +111,8 @@ class NATTENBlock(nn.Module):
         if natten is None:
             raise ImportError("Please install NATTEN: pip install natten")
             
-    def _forward(self, x):
+    def _forward(self, x, debug=True):
+        if debug: print("NATTENBlock._forward: x.shape =",x.shape)
         B, C, H, W = x.shape
         identity = x
         
@@ -125,9 +126,10 @@ class NATTENBlock(nn.Module):
         qkv = qkv.permute(3, 0, 4, 1, 2, 5)  # 3 B heads H W dim
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        attn = natten.functional.na2d_qk(q, k, self.kernel_size)
-        attn = attn.softmax(dim=-1)
-        x = natten.functional.na2d_av(attn, v, self.kernel_size)
+        #attn = natten.functional.na2d_qk(q, k, self.kernel_size)
+        #attn = attn.softmax(dim=-1)
+        #x = natten.functional.na2d_av(attn, v, self.kernel_size)
+        x = natten.functional.na2d(q, k, v, kernel_size=self.kernel_size)
             
         x = x.permute(0, 2, 3, 1, 4).reshape(B, H, W, C)
         x = self.proj(x)
@@ -377,6 +379,7 @@ class VQVAE(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.codebook_levels = codebook_levels
         self.vq_num_embeddings = vq_num_embeddings
+        self.indices = None # used for tracking index output
         
         # Encoder with checkpointing
         encoder_layers = []
@@ -462,6 +465,17 @@ class VQVAE(nn.Module):
         z = self.encoder(x)
         if debug: print("encode: z.shape = ", z.shape, flush=True)
         return z
+
+    def quantize(self, z, debug=False):
+        """Vector quantization: permute → flatten → VQ → restore shape → permute back"""
+        z = z.permute(0, 2, 3, 1)
+        orig_shape = z.shape
+        z = z.reshape(-1, z.shape[-1])
+        
+        z_q, self.indices, commit_loss = self.vq(z)
+        
+        z_q = z_q.view(orig_shape).permute(0, 3, 1, 2)
+        return z_q, commit_loss
     
     def decode(self, z_q, noise_strength=0.0):
         #z_q = self.expand(z_q)  # undoes the "compress" from self.encode
@@ -485,33 +499,18 @@ class VQVAE(nn.Module):
         
     def forward(self, x, noise_strength=None, minval=0, get_stats=False):
         z = self.encode(x)
-        if noise_strength is None:
+        if noise_strength is None:  # this is to try to avoid overfitting, add some generalization/robustness
             noise_strength = 0.05 if self.training else 0.0
 
         if self.info is None: 
             self.info = z.shape
             print("\nINFO: .encode output z.shape",self.info,"\n",flush=True)
           
-        # prepare for VQ: permute and reshape
-        z = z.permute(0, 2, 3, 1)
-        z = z.reshape(-1, z.shape[-1])
-              
-        z_q, indices, commit_loss = self.vq(z)  # Apply vector quantization
-
-        # undo the reshape and permute
-        z_q = z_q.view(x.shape[0], x.shape[2] // (2 ** self.num_downsamples), 
-                    x.shape[3] // (2 ** self.num_downsamples), -1)
-        z_q = z_q.permute(0, 3, 1, 2)
+        z_q, commit_loss = self.quantize(z)
         
         x_recon = self.decode(z_q, noise_strength=noise_strength)
 
         if get_stats: # for some diagnostics
-
-            #for level, idx_tensor in enumerate(indices):
-            #    unique_indices = torch.unique(idx_tensor.flatten())
-            #    self.codebook_usage[level].index_add_(0, unique_indices, torch.ones_like(unique_indices, dtype=torch.float))
-            #self.usage_count += x.shape[0]
-
             stats = self.calc_distance_stats(z, z_q)
             return x_recon, commit_loss.mean(), stats
         else:
@@ -678,3 +677,37 @@ def setup_codec(config, device, no_natten=False, load_checkpoint=True, eval=True
     if eval: codec=codec.eval()
     print("Codec model ready")
     return codec
+
+
+
+
+def transfer_outer_layers(source_model, target_model, freeze_transferred=True):
+    """Transfer outer encoder/decoder layers, avoiding attention layer mismatches."""
+    print("Transferring outer layers...")
+    
+    # Transfer first 2 encoder blocks only (before attention layers)
+    for i in range(2):  # Only layers 0,1 - no attention
+        source_layer = source_model.encoder[i]
+        target_layer = target_model.encoder[i]
+        target_layer.load_state_dict(source_layer.state_dict())
+        if freeze_transferred:
+            for param in target_layer.parameters(): param.requires_grad = False
+        print(f"Transferred encoder[{i}]")
+    
+    # Transfer last 2 decoder blocks (final upsampling layers)
+    for i in range(2):
+        source_layer = source_model.decoder.layers[-(i+1)]  # -1, -2
+        target_layer = target_model.decoder.layers[-(i+1)]  # -1, -2  
+        target_layer.load_state_dict(source_layer.state_dict())
+        if freeze_transferred:
+            for param in target_layer.parameters(): param.requires_grad = False
+        print(f"Transferred decoder.layers[{-(i+1)}]")
+    
+    # Stats
+    total_params = sum(p.numel() for p in target_model.parameters())
+    frozen_params = sum(p.numel() for p in target_model.parameters() if not p.requires_grad)
+    trainable_params = total_params - frozen_params
+    print(f"Frozen: {frozen_params:,} ({frozen_params/total_params*100:.1f}%)")
+    print(f"Trainable: {trainable_params:,} ({trainable_params/total_params*100:.1f}%)")
+
+

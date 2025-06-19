@@ -389,6 +389,9 @@ def regroup_lines(img, debug=False):
     img2 = Image.new('RGB', img.size)
     if debug: print(f"regroup_lines: img.size = {img.size}")
 
+    if img.size[0] == 128: 
+        if debug: print("regroup lines, returning img as is (no op)")
+        return img # do nothing
     if img.size[0] == 256:
         img2 = Image.new('RGB', (512,128))
     elif img.size[0] != 2048:

@@ -35,31 +35,12 @@ def rk4_step(f,     # function that takes (y,t) and returns dy/dt, i.e. velocity
              dt,    # requested time step size
              debug=False
              ):
-    start = time.time()
     k1 = f(y, t)
-    if debug: print(f"  k1: {(time.time()-start)*1000:.1f}ms")
     tpdto2 = t+dt/2
-    start = time.time()
     k2 = f(y + dt*k1/2, tpdto2)
-    if debug: print(f"  k2: {(time.time()-start)*1000:.1f}ms")
-    start = time.time()
     k3 = f(y + dt*k2/2, tpdto2)
-    if debug: print(f"  k3: {(time.time()-start)*1000:.1f}ms")
-    start = time.time()
     k4 = f(y + dt*k3, t + dt)
-    if debug: print(f"  k4: {(time.time()-start)*1000:.1f}ms")
     return y + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
-
-@torch.no_grad()
-def rk4_step_new(model, cond, cfg_strength, y, t, dt):
-    model.eval()
-    k1 = v_func_cfg(model, cond, cfg_strength, y, t).detach()
-    tpdto2 = t+dt/2
-    k2 = v_func_cfg(model, cond, cfg_strength, y + dt*k1/2, tpdto2).detach()
-    k3 = v_func_cfg(model, cond, cfg_strength, y + dt*k2/2, tpdto2).detach()
-    k4 = v_func_cfg(model, cond, cfg_strength, y + dt*k3, t + dt).detach()
-    return y + (dt/6)*(k1 + 2*k2 + 2*k3 + k4)
-
 
 @torch.no_grad()
 def v_func_cfg(model,          # the flow model
@@ -71,35 +52,21 @@ def v_func_cfg(model,          # the flow model
                t_scale=999,     # 999 for naive embedding, 1.0 for sophisticated empedding
                debug=False
                ):
-    start0 = time.time()
-    device, dtype = x.device, x.dtype
-
-    if debug: full_start = time.time()
-    #t_vec = torch.full((x.shape[0],), t, device=device, dtype=dtype)
-    #t_vec = torch.tensor(t, device=device, dtype=dtype).expand(x.shape[0])
-    #t_vec = torch.full((x.shape[0],), t.item(), device=device, dtype=dtype)
     t_vec_template.fill_(t.item())
     t_vec = t_vec_template
-    if debug: print(f"  t_vec creation time took {(time.time()-full_start)*1000:.1f}ms")
-
-    if debug: start = time.time()
     #v = model(x, t_vec * t_scale, aug_cond=None, class_cond=cond) # for HDiT
     v = model(x, t_vec * t_scale, cond=cond)
-    _ = v.sum().item()  # Force full computation and sync
-    if debug: print(f"  v: model eval + sync time took {(time.time()-start)*1000:.1f}ms")
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
+    _ = v.sum().item()  # Force full computation and sync before moving on
+    if torch.cuda.is_available():  # just added to avoid killing vram
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
     if cond is not None and cfg_strength is not None and cfg_strength != 0:
-        if debug: print("v_func_cfg: calling model for uncond ")
-        #v_uncond = model(x, t_vec * t_scale, aug_cond=None, class_cond=None)
+        #v_uncond = model(x, t_vec * t_scale, aug_cond=None, class_cond=None) # for HDiT
         v_uncond = model(x, t_vec * t_scale, cond=None)
         v = v_uncond + cfg_strength * (v - v_uncond)
 
-    if debug: print(f"  v_func_cfg time took {(time.time()-start0)*1000:.1f}ms")
     return v
-
-
 
 @torch.no_grad()
 def generate_latents_rk4(model,          # the flow model 
@@ -107,71 +74,58 @@ def generate_latents_rk4(model,          # the flow model
                          n_steps=50,     # integration steps
                          cond=None,      # conditioning labels/embeddings
                          cfg_strength=3.0, # classifier-free guidance strength
-                         debug=False,
+                         debug=True,
                          ):
     """Generate latents using RK4 integration - this 'sampling' routine is primarily used for visualization."""
+    if debug: print("generate_latents_rk4:start")
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available:  # added to avoid CUDA OOM
+        torch.cuda.empty_cache()   # try to free up vram
 
     cond = None # todo remove this
     device, dtype = next(model.parameters()).device, next(model.parameters()).dtype 
     if debug: print("in generate_latents_rk4: device, dtype =",device, dtype)
-    initial_points = torch.randn(shape, device=device, dtype=dtype)
-    current_points = initial_points.clone()
+    current_points = torch.randn(shape, device=device, dtype=dtype)   # source = randn noise
     ts = torch.linspace(0, 1, n_steps, device=device, dtype=dtype)
-    t_vec_template = torch.zeros(shape[0], device=device, dtype=dtype)
-
-    # Add this right before your RK4 loop in generate_latents_rk4:
-    if debug: print("Testing tensor ops in training context:")
-    test_tensor = torch.zeros(4, device=device)
-    if debug: start = time.time()
-    test_tensor.fill_(0.5)
-    if debug: print(f"fill in training context: {(time.time()-start)*1000:.1f}ms")
-    
-    # Then proceed with your normal RK4 loop
-
     if warp_time: ts = warp_time(ts)
+    t_vec_template = torch.zeros(shape[0], device=device, dtype=dtype)  # pre-allocate for mem-efficient time-coord broadcast
     v_func = partial(v_func_cfg, model, cond, cfg_strength, t_vec_template)
     for i in range(len(ts)-1):
-        if debug: print(f"calling rk4_step, i = {i}")
-        if debug: start = time.time()
         current_points = rk4_step(v_func, current_points, ts[i], ts[i+1]-ts[i])
-        if debug: end = time.time()
-        if debug: print(f"rk4_step took {(end-start)*1000:.1f}ms")
-    nfe = n_steps * 4  # number of function evaluations
+    nfe = n_steps * 4  # number of function evaluations, rk4 has 4
     return current_points, nfe
 
 
-@torch.no_grad()
-def generate_latents_rk45(model,            # the flow model
-                          shape,            # (batch_size, channels, height, width) 
-                          device,           # torch device
-                          cond=None,        # conditioning labels/embeddings
-                          cfg_strength=3.0, # classifier-free guidance strength  
-                          eps=0.001):       # integration epsilon
-    """Runge-Kutta method for integration. Original Source: Tadao Yamaoka"""
-    rtol = atol = 1e-05
-    model.eval()
-    gc.collect()
-    torch.cuda.empty_cache()
-
-    z0 = torch.randn(shape).to(device)
-    
-    def ode_func(t, x):
-        x = from_flattened_numpy(x, shape).to(device).type(torch.float32)
-        t_w = warp_time(t) 
-        t_vec = torch.ones(shape[0], device=x.device) * t_w
-        v = model(x, t_vec * 999, cond)                # if cond=None you get uncond
-        if cond is not None and cfg_strength is not None and cfg_strength != 0:   # classifier-free guidance
-            v_uncond = model(x, t_vec * 999, None)
-            v = v_uncond + cfg_strength * (v - v_uncond) # cfg_strength ~= conditioning strength
-        return to_flattened_numpy(v)
-
-    solution = integrate.solve_ivp(   # TODO: we could just do regular rk4 and maybe have it faster; time it
-        ode_func, (eps, 1), to_flattened_numpy(z0), rtol=rtol, atol=atol, method="RK45")
-    nfe = solution.nfev
-    x = torch.tensor(solution.y[:, -1]).reshape(shape).type(torch.float32)
-    return x, nfe
+#@torch.no_grad()
+#def generate_latents_rk45(model,            # the flow model
+#                          shape,            # (batch_size, channels, height, width) 
+#                          device,           # torch device
+#                          cond=None,        # conditioning labels/embeddings
+#                          cfg_strength=3.0, # classifier-free guidance strength  
+#                          eps=0.001):       # integration epsilon
+#    """Runge-Kutta method for integration. Original Source: Tadao Yamaoka"""
+#    rtol = atol = 1e-05
+#    model.eval()
+#    gc.collect()
+#    torch.cuda.empty_cache()
+#
+#    z0 = torch.randn(shape).to(device)
+#    
+#    def ode_func(t, x):
+#        x = from_flattened_numpy(x, shape).to(device).type(torch.float32)
+#        t_w = warp_time(t) 
+#        t_vec = torch.ones(shape[0], device=x.device) * t_w
+#        v = model(x, t_vec * 999, cond)                # if cond=None you get uncond
+#        if cond is not None and cfg_strength is not None and cfg_strength != 0:   # classifier-free guidance
+#            v_uncond = model(x, t_vec * 999, None)
+#            v = v_uncond + cfg_strength * (v - v_uncond) # cfg_strength ~= conditioning strength
+#        return to_flattened_numpy(v)
+#
+#    solution = integrate.solve_ivp(   # TODO: we could just do regular rk4 and maybe have it faster; time it
+#        ode_func, (eps, 1), to_flattened_numpy(z0), rtol=rtol, atol=atol, method="RK45")
+#    nfe = solution.nfev
+#    x = torch.tensor(solution.y[:, -1]).reshape(shape).type(torch.float32)
+#    return x, nfe
 
 
 @torch.no_grad()
@@ -195,12 +149,16 @@ def generate_latents(model,            # the flow model
 def decode_latents(codec,          # the codec/autoencoder model
                    latents,        # latent tensors to decode
                    is_midi=False,  # whether this is MIDI data
-                   keep_gray=False): # keep grayscale format for MIDI
+                   keep_gray=False,# keep grayscale format for MIDI
+                   device=None,
+                   debug=True): 
     """Decode latents to images"""
-    try:
-        device = next(codec.parameters()).device
-    except: 
-        device = latents.device
+    if device is None:
+        try:
+            device = next(codec.parameters()).device
+        except: 
+            device = latents.device
+    if debug: print("decode_latents: device = ",device)
     decoded = codec.decode(latents.to(device))
     return g2rgb(decoded, keep_gray=keep_gray) if is_midi else decoded
 
@@ -208,18 +166,21 @@ def decode_latents(codec,          # the codec/autoencoder model
 @torch.no_grad()
 def sampler(model, codec, method='rk4', batch_size=256, n_steps=100,
             cond=None, n_classes=0, latent_shape=(4,16,16), cfg_strength=3.0,
-            is_midi=False, keep_gray=False):
+            is_midi=False, keep_gray=False, device=None):
     """generates predicted latents and decodes them"""
-    shape = (batch_size,) + latent_shape
+    if device is None: device = next(model.parameters()).device
+    codec_device = next(codec.parameters()).device
+    assert device==codec_device, f"sampler, device mismatch: device = {device}, but  codec_device {codec_device}"
 
+    shape = (batch_size,) + latent_shape
     if cond is None and n_classes > 0:  # grid where each column is a single class (10 columns)
-        cond = torch.randint(n_classes, (10,)).repeat(batch_size // 10).to(next(model.parameters()).device)
+        cond = torch.randint(n_classes, (10,)).repeat(batch_size // 10).to(device)
     elif cond is not None:
         cond = cond[:batch_size]  # only grab what we can show
 
-    pred_latents, nfe = generate_latents(model, shape, method, n_steps, cond, cfg_strength)
+    pred_latents, nfe = generate_latents(model, shape, method, n_steps, cond, cfg_strength, device=device)
 
-    decoded_pred = decode_latents(codec, pred_latents, is_midi, keep_gray)
+    decoded_pred = decode_latents(codec, pred_latents, is_midi, keep_gray, device=device)
     return pred_latents, decoded_pred, nfe
 
 
@@ -232,9 +193,9 @@ def compute_sample_metrics(pred_latents,  target_latents,    # latent space
     print("compute_sample_metrics: using batch_size = ",batch_size)
     
     # Latent space metrics
-    sinkhorn_latent = sinkhorn_loss(target_latents[:batch_size], pred_latents[:batch_size])
-    
-    sinkhorn_px = sinkhorn_loss(decoded_target, decoded_pred)  # pixel space
+    with torch.no_grad():
+        sinkhorn_latent = sinkhorn_loss(target_latents[:batch_size], pred_latents[:batch_size])
+        sinkhorn_px = sinkhorn_loss(decoded_target, decoded_pred)  # pixel space
     fid_px = fid_score(decoded_target, decoded_pred)  # pixel space
 
     metrics = { 'metrics/sinkhorn': sinkhorn_latent, 'metrics/sinkhorn_px': sinkhorn_px, 'metrics/FID_px': fid_px }
@@ -265,7 +226,8 @@ def evaluate_model(model,            # the flow model to evaluate
     """Generate samples and compute metrics for model evaluation"""
     model.eval(), codec.eval()
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available(): 
+        torch.cuda.empty_cache()
 
     latent_shape = target_latents.shape[-3:]
     shape = (batch_size,) + latent_shape
@@ -307,7 +269,8 @@ def evaluate_model(model,            # the flow model to evaluate
         wandb.log(metrics)
 
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available(): 
+        torch.cuda.empty_cache()
 
     model.train()
     return metrics
