@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from functools import partial
 import numpy as np
 import random
-import cv2 
+from PIL import Image
 
 
 
@@ -80,7 +80,9 @@ class MaskEncoder(nn.Module):
 
 
 
-def simulate_brush_stroke(size=(128,128), brush_size=5):
+def simulate_brush_stroke_cv2(size=(128,128), brush_size=5):
+    import cv2 
+
     # caled by generate_mask, below
     mask = np.zeros(size)
     # Random walk with varying brush size
@@ -94,17 +96,70 @@ def simulate_brush_stroke(size=(128,128), brush_size=5):
     return mask
 
 
-def generate_mask(size=(128,128), device='cpu'): 
-    """Ideally we want something that resembles human-drawn "brush strokes" with a circular cross section"""
-    if np.random.rand() < 0.7: 
-        brush_size = np.random.randint(1, 10)
-        mask = simulate_brush_stroke(size, brush_size)
-    else:  # other kinds of denoising masks  for robustness
-        # placeholder code stolen from https://github.com/annegnx/PnP-Flow/blob/main/demo/demo.ipynb
-        mask = np.random.rand(size) > 0.7 # Create a random mask with 70% missing pixels
 
-    mask_tensor = torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
-    return mask_tensor
+def simulate_brush_stroke(size=(128,128), num_strokes=1, brush_size=None, max_brush_size=15):
+    mask = np.zeros(size)
+    for s in range(num_strokes):
+        bs = brush_size if brush_size is not None else np.random.randint(3, max_brush_size)
+        x, y = np.random.randint(0, size[0]), np.random.randint(0, size[1])  # No padding
+        stroke_length = np.random.randint(100, 300)
+        direction = np.random.uniform(-np.pi/10, np.pi/10)
+        if x > size[0]/2: direction += np.pi
+        dir_change_std = 0.04  # in radians. 
+        for _ in range(stroke_length):
+            direction += np.random.normal(0, dir_change_std)
+            dx, dy = np.cos(direction) * 0.7, np.sin(direction) * 0.7
+            new_x, new_y = x+dx, y+dy
+            if new_x < 0 or new_x >= size[0] or new_y < 0 or new_y >= size[1]: break # stop when we go off the edge
+
+            x, y = new_x, new_y
+            #current_brush = max(1, bs + np.random.randint(-4, 4))
+            current_brush = max(1, bs + np.random.randint(-bs//2, bs//2))  # Huge variation
+            x_int, y_int, r = int(x), int(y), current_brush + 1
+            y_min, y_max, x_min, x_max = max(0,y_int-r), min(size[0],y_int+r+1), max(0,x_int-r), min(size[1],x_int+r+1)
+            yy, xx = np.ogrid[y_min:y_max, x_min:x_max]
+            mask[y_min:y_max, x_min:x_max][(xx - x_int)**2 + (yy - y_int)**2 <= current_brush**2] = 1
+    return mask
+
+
+def generate_rectangles(size=(128,128), n_max=8, max_size_ratio=0.3):
+    mask = np.zeros(size)
+    max_w, max_h = int(size[0] * max_size_ratio), int(size[1] * max_size_ratio)
+    pad_x, pad_y = max_w, max_h  # Leave room for max rectangle size
+
+    for _ in range(np.random.randint(1, n_max+1)):
+        x = np.random.randint(0, size[0] - pad_x)
+        y = np.random.randint(0, size[1] - pad_y)
+        w = np.random.randint(5, max_w)
+        h = np.random.randint(5, max_h)
+        mask[x:x+w, y:y+h] = 1
+    return mask
+
+
+
+def generate_mask(size=(128,128), 
+        mask_type = '',  # can specify a mask algorithm name or else it'll be randomly chosen according to choices & p
+        choices = ['brush', 'rectangles', 'total', 'noise', 'nothing'],  # names of different kinds of masks  to choose from
+        p = [0.65, 0.15, 0.15, 0.049, 0.001],    # probabilities for each kind of mask
+        to_tensor=True, device='cpu', debug=False):
+    """Ideally we want something that resembles human-drawn "brush strokes" with a circular cross section"""
+    if mask_type == '':  mask_type = np.random.choice(choices, p=p)
+    if debug: print("mask_type = ",mask_type)
+    if mask_type == 'brush':
+        mask = simulate_brush_stroke(size, num_strokes=np.random.randint(1, 4))
+    elif mask_type == 'rectangles':
+        mask = generate_rectangles(size)
+    elif mask_type == 'total': # all mask = unconditional generation
+        mask = np.ones(size)
+    elif mask_type == 'noise': # no mask = no-op, no generation = boring
+        mask = np.random.rand(*size) > 0.7
+    elif mask_type == 'nothing': # no mask = no-op, no generation = boring
+        mask = np.zeros(size)
+    else: 
+        raise ValueError(f"Unsupported mask_type: {mask_type}")
+
+    if to_tensor: return torch.tensor(mask, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(device)
+    return mask
 
 
 # data:
@@ -149,7 +204,7 @@ if __name__ == "__main__":
     import torch.nn.functional as F
     from functools import partial
 
-    # Test both modes
+    # Mask Encoding: Test both modes 
     for mode in ['pool', 'bilinear']:
         print(f"\nTesting MaskEncoder with mode='{mode}'")
 
@@ -172,4 +227,28 @@ if __name__ == "__main__":
 
         print("✓ Test passed!")
 
-    print("\nAll tests completed successfully!")
+
+    print("\nGenerating mask variations...")
+    masks = []
+    grid_size = 10 # number of images along one edge
+    mask_size = 128
+    for i in range(grid_size**2):  # number of images
+        mask = generate_mask(size=(mask_size, mask_size), device='cpu', debug=True).squeeze().numpy()  # Remove batch/channel dims
+        masks.append((mask * 255).astype(np.uint8))  # Convert to 0-255 range
+    
+    print("Packaging mask variations as an  grid")
+    grid_img = np.zeros((grid_size * mask_size, grid_size * mask_size), dtype=np.uint8)
+    
+    for i in range(grid_size):
+        for j in range(grid_size):
+            idx = i * grid_size + j
+            y_start, y_end = i * mask_size, (i + 1) * mask_size
+            x_start, x_end = j * mask_size, (j + 1) * mask_size
+            grid_img[y_start:y_end, x_start:x_end] = masks[idx]
+    
+    # Save as PNG
+    filename = "../images/mask_gen_test.png"
+    Image.fromarray(grid_img, mode='L').save(filename)
+    print(f"✓ Saved mask grid to {filename}")
+    print("All tests completed successfully!")
+
