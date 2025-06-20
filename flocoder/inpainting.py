@@ -163,7 +163,7 @@ def generate_mask(size=(128,128),
 
 
 # data:
-def create_inpainting_triplet(full_image):
+def create_inpainting_triplet(full_image, codec, quantize=False):
     """Create (source_latents, mask_pixel, target_latents) triplet"""
     target_latents = codec.encode(full_image)
 
@@ -171,6 +171,8 @@ def create_inpainting_triplet(full_image):
 
     incomplete_image = full_image * (1 - mask_pixels)  # Zero out masked regions
     source_latents = codec.encode(incomplete_image)
+    if quantize: 
+        source_latents, target_latents = codec.quantize(source_latents), codec.quantize(target_latents)
 
     return source_latents, mask_pixels, target_latents
 
