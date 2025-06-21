@@ -23,6 +23,7 @@ from flocoder.general import handle_config_path, ldcfg
 from flocoder.codecs import setup_codec
 from flocoder.data import ImageListDataset, fast_scandir, MIDIImageDataset, InfiniteDataset
 from flocoder.data import create_image_loaders, midi_transforms, image_transforms
+from flocoder.inpainting import InpaintingDataset
 
 
 def generate_random_string(length=6):
@@ -30,11 +31,16 @@ def generate_random_string(length=6):
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
-def encode_batch(codec, batch, device):
+def encode_batch(codec, x, device, quantize=False):
     """Encode a batch of image tensors using codec with proper scaling."""
     with torch.no_grad():
-        batch = batch.to(device, non_blocking=True)
-        return codec.encode(batch)
+        x = x.to(device, non_blocking=True)
+        z = codec.encode(x)
+        if quantize: 
+            z_q, _ = codec.quantize(z)
+            return z_q
+        return z
+
 
 def setup_dataset(data_path, image_size, config, split='train'):
     """Set up and return the appropriate dataset based on the data path."""
@@ -45,12 +51,14 @@ def setup_dataset(data_path, image_size, config, split='train'):
         dataset = datasets.STL10(root=data_path, split=split, transform=transform, download=True)
     elif 'food101' in str(data_path).lower():
         dataset = datasets.Food101(root=data_path, split=split, transform=transform, download=True)
-    else: 
+    else:  # midi
         grayscale = ldcfg(config, 'in_channels', 3)==1
         transform = midi_transforms(image_size=image_size, random_roll=True, grayscale=grayscale)
-        dataset = MIDIImageDataset(transform=transform, split=split, config=config, debug=True)
+        dataset = MIDIImageDataset(transform=transform, split=split, config=config, debug=True, total_only=True)
     
-    return InfiniteDataset(dataset)  # Wrap in infinite dataset for augmentation
+    dataset = InfiniteDataset(dataset)  # Wrap in infinite dataset for augmentation
+    return dataset
+
 
 
 def setup_output_dir(output_dir):
@@ -73,9 +81,10 @@ def setup_output_dir(output_dir):
     return output_dir
 
 
-def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, num_workers, device, augs_per=768):
+def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, num_workers, device, 
+        augs_per=768, quantize=False, inpainting=False):
     """Process dataset with optimized parallel encoding and saving"""
-    print(f"Processing dataset with {dataset.actual_len} images")
+    print(f"\n\nProcessing dataset with {dataset.actual_len} images, augs_per = {augs_per}, quantize = {quantize}, inpainting = {inpainting}")
     print(f"Dataset type: {type(dataset)}")
     n_classes = 0
     if hasattr(dataset, '_labels'):
@@ -99,19 +108,40 @@ def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, n
     # Process batches with thread pool for I/O
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         with tqdm(total=max_batches, desc=f"Processing [0.00/{max_storage_bytes/1024**3:.1f} GB (0%)]") as pbar:
-            for batch_idx, (images, classes) in enumerate(dataloader):
+            for batch_idx, batch in enumerate(dataloader):
                 if batch_idx >= max_batches or current_storage >= max_storage_bytes: break
+                if type(batch) == tuple:  # "standard" operation
+                    target_images, classes = batch
+                elif type(batch) == dict and inpainting:
+                    target_images = batch['target_image']
+                    mask_pixels = batch['mask_pixels']
+                    source_images = batch['source_image']
+                    classes = batch['label']
+                    source_latents = encode_batch(codec, source_images, device, quantize=quantize)
+                else:
+                    raise ValueError(f"Unexpected batch format: {type(batch)}")
 
-                encoded_batch = encode_batch(codec, images, device)
+                target_latents = encode_batch(codec, target_images, device, quantize=quantize)
+
                 future_to_path = {}
 
                 # Submit file saving tasks
                 class_indices = set()
-                for i in range(encoded_batch.shape[0]):
-                    encoding = encoded_batch[i].cpu()
+                for i in range(target_latents.shape[0]):
+                    encoding = target_latents[i].cpu()
                     class_idx = classes[i].item() if isinstance(classes, torch.Tensor) else classes
                     class_indices.add(class_idx)
                     sample_id = f"{batch_idx}_{i}"
+
+                    if inpainting:
+                        data_to_save = {
+                            'target_latents': target_latents[i].cpu(),
+                            'source_latents': source_latents[i].cpu(),
+                            'mask_pixels': mask_pixels[i].cpu().bool() # bool to save storage space
+                        }
+                    else:
+                        data_to_save = target_latents[i].cpu()  # Keep old format for compatibility
+
 
                     # Determine output path based on class info
                     if has_classes:
@@ -122,7 +152,7 @@ def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, n
                         sub_dir_path.mkdir(exist_ok=True)
                         out_path = sub_dir_path / f"sample_{sample_id}_{generate_random_string(4)}.pt"
 
-                    future = executor.submit(torch.save, encoding, out_path)
+                    future = executor.submit(torch.save, data_to_save, out_path)
                     future_to_path[future] = out_path
                 #if batch_idx % 10 == 0:
                 #    print(f"Batch {batch_idx}: Encountered class indices: {sorted(class_indices)}")
@@ -174,11 +204,16 @@ def main(config) -> None:
     
     # Get configuration values with defaults
     data_path = config.data
+    inpainting=True # todo: move this somewhere like a config
     output_dir = f"{data_path}_encoded_{config.codec.choice}" if not ldcfg(config,'output_dir') else config.output_dir
+    if inpainting: 
+        output_dir += "_inpainting"
+    print(f"preencode_data: output_dir = ",output_dir)
     image_size = ldcfg(config,'image_size', 128)
     max_storage_gb = ldcfg(config,'max_storage_gb', 50, supply_defaults=True)
     batch_size = ldcfg(config,'batch_size', 32)
     augs_per = ldcfg(config,'augs_per', 512)
+    quantize = ldcfg(config,'quantize', False)
     num_workers = ldcfg(config,'num_workers', min(int(os.cpu_count() * 0.75), 64))
     
     codec = setup_codec(config, device)
@@ -187,6 +222,10 @@ def main(config) -> None:
         print(f"\nWorking on split =",split)
         # Setup dataset and output directory
         dataset = setup_dataset(data_path, image_size, config, split=split)
+
+        if inpainting:  # this will make it return a dict
+            dataset = InpaintingDataset(dataset)
+
         split_output_dir = setup_output_dir(output_dir+f"/{split}")
         
         # Process the dataset
@@ -198,7 +237,9 @@ def main(config) -> None:
             max_storage_bytes=max_storage_gb * 1024**3,
             num_workers=num_workers,
             device=device,
-            augs_per=augs_per
+            augs_per=augs_per,
+            quantize=quantize,
+            inpainting=inpainting,
         )
 
 

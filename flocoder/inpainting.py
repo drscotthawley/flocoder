@@ -10,13 +10,14 @@
 #      2. generate some (random) mask in pixel space  (don't try to encode the mask yet)
 #      3. remove the pixels in the image "under" the mask, and encode to latent space to serve as the source
 
-
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from functools import partial
 import numpy as np
 import random
 from PIL import Image
+from torch.utils.data import IterableDataset
 
 
 
@@ -162,6 +163,29 @@ def generate_mask(size=(128,128),
     return mask
 
 
+
+def generate_mask_batch(size=(128,128), batch_size=1, unique_masks=False, to_tensor=True, **kwargs):
+    #### NOTE: better to use InptainingDataset, below
+    """Generate masks for batch processing"""
+    if unique_masks and batch_size > 4:  # Parallelize for larger batches
+        from multiprocessing import Pool
+        from functools import partial
+        with Pool() as pool:
+            func = partial(generate_mask, size=size, to_tensor=False, **kwargs)
+            masks = pool.map(func, [None] * batch_size)
+        mask = np.stack(masks, axis=0)
+    elif unique_masks:
+        masks = [generate_mask(size, to_tensor=False, **kwargs) for _ in range(batch_size)]
+        mask = np.stack(masks, axis=0)
+    else:
+        mask = np.tile(generate_mask(size, to_tensor=False, **kwargs)[None, ...], (batch_size, 1, 1))
+
+    if to_tensor:
+        device = kwargs.get('device', 'cpu')
+        return torch.tensor(mask, dtype=torch.float32).unsqueeze(1).to(device)  # (batch_size, 1, H, W)
+    return mask
+
+
 # data:
 def create_inpainting_triplet(full_image, codec, quantize=False):
     """Create (source_latents, mask_pixel, target_latents) triplet"""
@@ -193,6 +217,40 @@ def create_inpainting_triplet(full_image, codec, quantize=False):
 #            'type': 'generation'
 #        }, save_path)
 
+
+
+
+class InpaintingDataset(IterableDataset):
+    """Dataset that generates masks and creates masked images on-the-fly"""
+    def __init__(self, base_dataset, mask_kwargs=None):
+        self.base_dataset = base_dataset
+        self.mask_kwargs = mask_kwargs or {}
+        if hasattr(base_dataset, 'actual_len'): 
+            print("InpaintingDataset: setting self.actual_len") 
+            self.actual_len = base_dataset.actual_len
+        else: 
+            print("InpaintingDataset: base_datset has no attribute 'actual_len'")
+    
+    def __iter__(self):
+        for item in self.base_dataset:
+            if isinstance(item, tuple):
+                full_image, label = item[0], item[1] if len(item) > 1 else 0
+            else:
+                full_image, label = item, 0
+                
+            # Generate mask for this specific item
+            size = full_image.shape[-2:] if hasattr(full_image, 'shape') else (128, 128)
+            mask_pixels = generate_mask(size=size, to_tensor=True, device=full_image.device, **self.mask_kwargs)
+            
+            # Create masked source image
+            source_image = full_image * (1 - mask_pixels.squeeze())
+            
+            yield {
+                'source_image': source_image,
+                'mask_pixels': mask_pixels.squeeze(), 
+                'target_image': full_image,
+                'label': label
+            }
 
 
 
