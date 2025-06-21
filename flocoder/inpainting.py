@@ -45,7 +45,8 @@ class DownsampleBlock(nn.Module):
 
 
 class MaskEncoder(nn.Module):
-    """Inpainting in latent space (where the space doesn't necessarily follow the spatial structure
+    """Long docstring! 
+    Inpainting in latent space (where the space doesn't necessarily follow the spatial structure
     of pixel space) requires that the inpainting mask get encoded somehow from pixel space to...
     if not latent space itself then at least some embedding suitable for use as a conditioning signal
     when training (a mask-conditioned model).
@@ -60,8 +61,29 @@ class MaskEncoder(nn.Module):
     means we hope we don't need positional encoding. The overall hope is that as long as the mask encodings
     are 'sufficiently unique' that the model is able to learn using them, then it doesn't really
     matter.    ...At least for now! ;-) 
+
+    How it gets used: 
+    1. pass in pixel-space mask to MaskEncoder get out mask_latents 
+    2. mask_latents get used as conditioning signal for model, combined with time via mask_cond_mlp projection
+    3. source data needs noise added to function properly, we suggest this sample code: 
+           mixed_source = source_latents + mask_latents * (noise - source_latents)
+        Note: this is the same this more common formulation: 
+           mixed_source = (1-mask_latents)*source_latents + mask_latents*noise
+        ...so either way you write it is the same.   Such equation(s) is intended for mask_latents being on [0,1],
+        and outside that domain may have unexpected behavior, yet the model may learn better if it has freedom to
+        "color outside the lines".  YMMV.
+        Use the kwarg "final_act" to enforce a domain, e.g sigmoid for [0,1]. but note that will also restrict gradients.
+        Current default is SILU [-.27, infty], and we hope the model learns what to do ;-) 
     """
-    def __init__(self, output_channels=4, shrink_fac=4, mode='pool'):
+    def __init__(self, 
+            output_channels=4,  
+            shrink_fac=4,      # Shrink per DownSampleBlock of which there are two, so square this
+            mode='pool',       # Mode for the hard-shrink.  !='pool' means use F.interpolate
+            final_act=nn.SiLU, # Activation before output. Intuitively we'd like mask_latents on [0,1] 
+                               #   but I won't force it: sigmoid might be too "harsh" ( saturation/vanishing gradients )
+                               #   SILU offers a bit o' freedom while keeping values from getting "really negative". 
+                               #   You may replace SILU with sigmoid, None, etc, to change this
+            ):
         # note that the 128's and 8's are not hard-coded, this just shrinks by a factor of shrink_fac^2
         super().__init__()
         self.layers = nn.Sequential(
@@ -69,10 +91,13 @@ class MaskEncoder(nn.Module):
             DownsampleBlock(17, 32, shrink_fac, mode),    # 17 -> 33 channels
             nn.Conv2d(33, output_channels, 1)             # 33 -> 4 channels
         )
+        if final_act is not None:
+             self.layers.add_module('final_act', final_act())
 
-    def forward(self, mask):  # 1x128x128
-        if mask.dtype in [torch.uint8, torch.int32, torch.int64, torch.bool]: mask = mask.float()
-        return self.layers(mask)  # 4x8x8
+    def forward(self, mask_pixels):  # e.g. shape = [batch, 1, 128, 128]
+        if mask_pixels.dtype in [torch.uint8, torch.int32, torch.int64, torch.bool]: 
+            mask_pixels = mask_pixels.float()
+        return self.layers(mask_pixels)  # e.g, shape of [batch, 4, 8, 8]
 
 
 
