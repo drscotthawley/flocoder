@@ -210,7 +210,7 @@ def main(config) -> None:
         output_dir += "_inpainting"
     print(f"preencode_data: output_dir = ",output_dir)
     image_size = ldcfg(config,'image_size', 128)
-    max_storage_gb = ldcfg(config,'max_storage_gb', 50, supply_defaults=True)
+    max_storage_gb = ldcfg(config,'max_storage_gb', 60)
     batch_size = ldcfg(config,'batch_size', 32)
     augs_per = ldcfg(config,'augs_per', 512)
     quantize = ldcfg(config,'quantize', False)
