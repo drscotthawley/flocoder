@@ -18,7 +18,7 @@ from .general import ldcfg
 from geomloss import SamplesLoss
 sinkhorn_fn = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)
 
-def sinkhorn_loss(target, gen, max_B=128, device='cuda'):
+def sinkhorn_loss(target, gen, max_B=None, device='cuda'):
     # usage: metrics['sinkhorn'] = sinkhorn_loss(target, integrator_outputs)
     # max_B limits eval batch size bc Sinkhorn calc can be slow, max_B=None means use whole batch
     assert target.shape == gen.shape, f"target.shape {target.shape} != gen.shape {gen.shape}"
@@ -230,10 +230,10 @@ class AdversarialLoss(nn.Module):
 
 
 
-fid_metric = FrechetInceptionDistance(feature=2048).cuda()  # or .to(device)
 @torch.no_grad()
 def fid_score(real, fake, device='cuda'):
-    real, fake = real.to(device), fake.to(device)
+    fid_calculator = FrechetInceptionDistance(feature=2048)  
+    fid_metric, real, fake = fid_calculator.to(device), real.to(device), fake.to(device)
 
     def to_uint8(x):
         x = x.clone()
