@@ -27,7 +27,7 @@ def mysigmoid(x, eps=0.01):
     return F.sigmoid(x) * (1 + 2*eps) - eps
 
 
-class DownsampleBlock(nn.Module):
+class DownsampleBlock_small(nn.Module):
     """ helper for MaskEncoder, below.
     shrinks by a factor of shrink_fac, includes concatenative skip connection of 'hard'/non-learnable
     interp or pooling"""
@@ -40,10 +40,29 @@ class DownsampleBlock(nn.Module):
         else:
             self.hard_shrink = partial(F.interpolate, scale_factor=1.0/shrink_fac, mode='bilinear')
 
-    def forward(self, x):  # x is either the pixel-space mask, or at least the previous hard-shrunk mask is on channel zero
+    def forward(self, x):  # x is either pixel-space mask or at least the previous hard-shrunk mask is on channel zero
         mask = x[:, 0:1, :, :]
         skip = self.hard_shrink(mask)
         learned = F.silu(self.conv(x))
+        return torch.cat([skip, learned], dim=1)
+
+
+class DownsampleBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, shrink_fac=4, mode='pool'):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, shrink_fac, stride=shrink_fac)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, 3, padding=1)  
+
+        if mode == 'pool':
+            self.hard_shrink = nn.AvgPool2d(kernel_size=shrink_fac, stride=shrink_fac)
+        else:
+            self.hard_shrink = partial(F.interpolate, scale_factor=1.0/shrink_fac, mode='bilinear')
+
+    def forward(self, x):
+        mask = x[:, 0:1, :, :]
+        skip = self.hard_shrink(mask)
+        learned = F.silu(self.conv1(x))
+        learned = F.silu(self.conv2(learned))  
         return torch.cat([skip, learned], dim=1)
 
 
@@ -181,7 +200,7 @@ def generate_rectangles(size=(128,128), max_size_ratio_x=0.8, max_size_ratio_y=0
     return mask.T # .T bc numpy has x & y reversed
 
 
-
+_status_msg = ''
 def generate_mask(size=(128,128), 
         mask_type = '',  # can specify a mask algorithm name or else it'll be randomly chosen according to choices & p
         choices = ['total', 'brush', 'rectangles', 'noise', 'nothing'],  # names of different kinds of masks  to choose from
@@ -189,6 +208,12 @@ def generate_mask(size=(128,128),
         #p=        [ 0.01,    0.02,      0.87,         0.05,    0.05],      # probabilities for each kind of mask
         to_tensor=True, device='cpu', debug=False):
     """Ideally we want something that resembles human-drawn "brush strokes" with a circular cross section"""
+    global _status_msg 
+
+    if _status_msg == '':  # one-time status message for first call
+        _status_msg = f"generate_mask: choices = {choices}, p={p}"
+        print(_status_msg)   
+
     if mask_type == '':  
         mask_type = np.random.choice(choices, p=p)
     if debug: print("mask_type = ",mask_type)

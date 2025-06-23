@@ -15,6 +15,10 @@ def print_vram(tag=""):
         print(f"VRAM {tag}: CPU mode")
 
 
+def key_usable(d, key):
+    "lil utility to check if we can use a dict elemement. just simplifies code readability"
+    return (d is not None) and isinstance(d, dict) and (d.get(key) is not None)
+
 
 def handle_config_path():
     """Making up for Hydra weirdness: allow for --config-name to include full file path, with or without equals sign"""

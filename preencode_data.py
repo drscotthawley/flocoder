@@ -224,7 +224,10 @@ def main(config) -> None:
         dataset = setup_dataset(data_path, image_size, config, split=split)
 
         if inpainting:  # this will make it return a dict
-            dataset = InpaintingDataset(dataset)
+            #dataset = InpaintingDataset(dataset)
+            mask_kwargs = {'choices':['brush','rectangles','noise'], 'p':[0.55, 0.4, 0.05]} # leave out 'total' and 'nothing' for on-the-fly, later
+            print("creating InpaintingDataset with mask_kwargs =",mask_kwargs)
+            dataset = InpaintingDataset(dataset, mask_kwargs=mask_kwargs)
 
         split_output_dir = setup_output_dir(output_dir+f"/{split}")
         

@@ -13,6 +13,7 @@ from einops.layers.torch import Rearrange
 from torch import einsum, nn
 import warnings
 
+from .general import key_usable
 
 class SinusoidalPositionEmbeddings(nn.Module):
     def __init__(self, dim):
@@ -212,10 +213,26 @@ class Unet(nn.Module):
 
         if mask_cond: 
             self.mask_fusion_conv = nn.Sequential(
-                nn.Conv2d(dim + channels , 2*dim, 5, padding=2),  # 5x5 kernel
+                nn.Conv2d(dim + channels, 2*dim, 5, padding=2),
                 nn.SiLU(),
-                nn.Conv2d(2*dim, dim, 5, padding=2)      # 5x5 kernel
+                nn.Conv2d(2*dim, 2*dim, 3, padding=1),  # extra layer
+                nn.SiLU(),
+                nn.Conv2d(2*dim, dim, 3, padding=1)     # smaller kernel
             )
+            # Down-path mask fusions at different scales
+            self.down_mask_fusions = nn.ModuleList()
+            for i, (dim_in, dim_out) in enumerate(in_out[:2]):  # first 2 scales
+                self.down_mask_fusions.append(nn.Sequential(
+                    nn.Conv2d(dim_in + channels, dim_in, 3, padding=1),
+                    nn.SiLU()
+                ))
+            # Up-path fusions  
+            self.up_mask_fusions = nn.ModuleList()
+            for i, (dim_in, dim_out) in enumerate(list(reversed(in_out))[:2]):  # first 2 up scales
+                self.up_mask_fusions.append(nn.Sequential(
+                    nn.Conv2d(dim_out + channels, dim_out, 3, padding=1),
+                    nn.SiLU()
+                ))
 
         # layers
         self.downs = nn.ModuleList([])
@@ -268,14 +285,17 @@ class Unet(nn.Module):
         self.final_res_block = block_klass(dim * 2, dim, time_emb_dim=time_dim)
         self.final_conv = nn.Conv2d(dim, self.out_dim, 1)
 
+
     def _forward(self, x, time, cond=None):
-        if cond is not None and isinstance(cond, dict) and 'mask_cond' in cond:
-            if torch.allclose(cond['mask_cond'], torch.zeros_like(cond['mask_cond'])): # mask exists but it all 0's: no inpainting = no gen = no flow
-                return torch.zeros_like(x)  # no flow = zero velocity
+        #if cond is not None and isinstance(cond, dict) and 'mask_cond' in cond and cond['mask_cond'] is not None:
+        #if key_usable(cond, 'mask_cond'):
+        #    if torch.allclose(cond['mask_cond'], torch.zeros_like(cond['mask_cond'])): # mask exists but it all 0's: no inpainting = no gen = no flow
+        #        return torch.zeros_like(x)  # no flow = zero velocity
 
         x = self.init_conv(x)  # increases channels, e.g. 4->8, to make x a cube 
 
-        if cond is not None and isinstance(cond, dict) and 'mask_cond' in cond and hasattr(self,'mask_fusion_conv'):
+        #if cond is not None and isinstance(cond, dict) and 'mask_cond' in cond and hasattr(self,'mask_fusion_conv') and cond['mask_cond'] is not None:
+        if key_usable(cond, 'mask_cond') and hasattr(self,'mask_fusion_conv'): 
             # mask cond is not a scalar like t or class id. raw mlp into t would destroy structure so we combine with x...
             mask_cond = cond['mask_cond']
             if not torch.allclose(mask_cond, torch.ones_like(mask_cond)):  # bypass mask use if mask_cond is all 1's; default is uncond gen anyway
@@ -302,13 +322,23 @@ class Unet(nn.Module):
 
         h = []  # h stores a stack of values for (concatenative) skip connections
 
-        for block1, block2, attn, downsample in self.downs:
+        #for block1, block2, attn, downsample in self.downs:
+        for ind, (block1, block2, attn, downsample) in enumerate(self.downs):
+
             x = block1(x, t)
             h.append(x)
 
             x = block2(x, t)
             x = attn(x)
             h.append(x)
+
+            # Inject inpainting mask at this scale
+            if (key_usable(cond, 'mask_cond') and hasattr(self,'down_mask_fusions')
+                and ind < len(self.down_mask_fusions)):
+                mask_resized = F.interpolate(mask_cond, size=x.shape[-2:], mode='bilinear')
+                x_with_mask = torch.cat([x, mask_resized], dim=1)
+                x = x + self.down_mask_fusions[ind](x_with_mask)  # residual
+
 
             x = downsample(x)
 
@@ -316,13 +346,23 @@ class Unet(nn.Module):
         x = self.mid_attn(x)
         x = self.mid_block2(x, t)
 
-        for block1, block2, attn, upsample in self.ups:
+        #for block1, block2, attn, upsample in self.ups:
+        for ind, (block1, block2, attn, upsample) in enumerate(self.ups):
+
             x = torch.cat((x, h.pop()), dim=1)
             x = block1(x, t)
 
             x = torch.cat((x, h.pop()), dim=1)
             x = block2(x, t)
             x = attn(x)
+
+            # Inject mask at this scale  
+            if (key_usable(cond, 'mask_cond') and hasattr(self,'up_mask_fusions')
+                and ind < len(self.up_mask_fusions)):
+                mask_resized = F.interpolate(mask_cond, size=x.shape[-2:], mode='bilinear')
+                x_with_mask = torch.cat([x, mask_resized], dim=1)
+                x = x + self.up_mask_fusions[ind](x_with_mask)  # residual
+        
 
             x = upsample(x)
 

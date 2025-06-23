@@ -12,7 +12,7 @@ import wandb
 from tqdm.auto import tqdm
 import hydra
 from omegaconf import OmegaConf
-
+import numpy as np
 
 from flocoder.unet import Unet
 #from flocoder.unet import MRUnet # didn't help
@@ -69,9 +69,26 @@ class EMA:
                 self.backup[name] = None
 
 
+def otf_gen_aug_indices(mask, p_ones=0.3, p_zeros=0.02):
+    batch_size = mask.shape[0]
+    n_ones = int(p_ones * batch_size)
+    n_zeros = int(p_zeros * batch_size)
+
+    ones_indices = np.random.choice(batch_size, n_ones, replace=False).tolist()
+    remaining_indices = [i for i in range(batch_size) if i not in ones_indices]
+    zeros_indices = np.random.choice(remaining_indices, min(n_zeros, len(remaining_indices)), replace=False).tolist()
+
+    all_indices = set(range(batch_size))
+    normal_indices = list(all_indices - set(ones_indices) - set(zeros_indices))
+
+    return ones_indices, zeros_indices, normal_indices
+
+
+
 def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
          epoch=None, 
          curriculum_epochs=10,    # for the early epochs, we just do unconditional gen which is easier for the model to learn than mask geometries
+         extend_epochs=20,
          ): 
     """main routine that unpacks dataloader batch (in train or val sets) to usable data
        also does some mask encoding... whatever data-prep ops are likely to be the same for train and val sets
@@ -83,10 +100,10 @@ def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
             target = data['target_latents'].to(device)
             class_cond = class_cond.to(device)
             if mask_encoder is not None:
-                mask_pixels = data['mask_pixels'] # use/save this for later debugging
+                mask_pixels = data['mask_pixels'].float() # use/save this for later debugging, but float makes it more versatile than bool
                 if len(mask_pixels.shape) < 4: mask_pixels = mask_pixels.unsqueeze(1)  # add channel dim if needed (and it's typically needed)
                 mask = mask_pixels.to(device)
-                orig_source = data['source_latents'].to(device)
+                source = data['source_latents'].to(device)
         else:
             target, class_cond = data.to(device), class_cond.to(device)
     else:
@@ -96,17 +113,26 @@ def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
     noise = torch.randn_like(target)  # randn noise
     if mask is None:  # no inpainting mask, start from noise
         source = noise
-    elif mask is not None and mask_encoder is not None:  # for conditional inpainting
-        #if epoch > curriculum_epochs:  
-        real_data_prob = 1.0 if epoch > curriculum_epochs else max(0,epoch-1)/curriculum_epochs  # epoch starts at 1 btw
-        if np.random.rand() < real_data_prob:  # CL: probabilistically turn off partial maskng in facvor of uncond gen
-            # normal inpainting operation: 
-            if target.shape != mask.shape:  # if target in latent space, mask in pixel space: need to encode
-                mask = mask_encoder(mask)   # learnable mask latents
-        else: # unconditional generation. curriculum learning: initialize the flow model to do no mask-cond at first. source = pure gaussian noise
-            mask_pixels = torch.ones_like(mask_pixels) 
-            mask = torch.ones_like(target) 
-        source = orig_source + mask * (noise - orig_source)  # blend orig_source & noise via (learned) mask latents
+    elif mask_pixels is not None and mask_encoder is not None:  # for conditional inpainting
+        # we can do curriculum learning and/or on-the-fly data augmentation by overwriting the mask & source info...
+        p_ones, p_zeros = 0.3, 0.02
+        if epoch <= curriculum_epochs:    # curriculum learning: start with unconditional generation
+            #return noise, target, class_cond, None, None  # simple curriculum: hard switch
+
+            p_ones, p_zeros = (curriculum_epochs - (epoch-1))/curriculum_epochs, 0.0    # ramp down the probility of all-ones as epochs increase; no zeros for CL
+        elif epoch <= extend_epochs:  # extended transition
+            # smooth transition from curriculum to final values
+            progress = (epoch - curriculum_epochs) / (extend_epochs - curriculum_epochs)
+            p_ones = 0.1 + (0.3 - 0.1) * progress  # 0.1 -> 0.3
+            p_zeros = 0.02 * progress  # 0 -> 0.02
+
+        oi, zi, ni = otf_gen_aug_indices(mask, p_ones, p_zeros)
+        if len(oi) > 0: # ones indices  - uncond generation
+            mask_pixels[oi], source[oi] = 1, noise[oi]  # for the 1's, we use pytorch's broadcasting of scalars. (note: mask[oi] already=1) 
+        if len(zi) > 0: # zeros indices  - no inpainting/gen
+            mask_pixels[zi], source[zi] = 0, target[zi]
+        mask = mask_encoder(mask_pixels.to(device))
+        source = source + mask*(noise - source)  # blending equation 
     else: 
         assert False, "Unintended edge case"
 
@@ -172,7 +198,7 @@ def train_flow(config):
                 print("we're inpainting")
             sample_item = batch[0]['target_latents'][0]
             print("sample_item.shape = ",sample_item.shape)
-        elif batch_date_type == tuple: 
+        elif batch_data_type == tuple: 
             print("we've got a (standard) tuple")
             sample_item, _ = batch[0]  
             print("sample_item.shape = ",sample_item.shape)
