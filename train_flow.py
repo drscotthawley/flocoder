@@ -97,9 +97,8 @@ def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
     if mask is None:  # no inpainting mask, start from noise
         source = noise
     elif mask is not None and mask_encoder is not None:  # for conditional inpainting
-        #uncond_only_prob = 1.0 if epoch <= curriculum epochs  else  (curriculum_epochs - epoch + 1)/curriculum_epochs
-        real_data_prob = 1.0 if epoch >= curriculum_epochs else epoch/curriculum_epochs
         #if epoch > curriculum_epochs:  
+        real_data_prob = 1.0 if epoch > curriculum_epochs else max(0,epoch-1)/curriculum_epochs  # epoch starts at 1 btw
         if np.random.rand() < real_data_prob:  # CL: probabilistically turn off partial maskng in facvor of uncond gen
             # normal inpainting operation: 
             if target.shape != mask.shape:  # if target in latent space, mask in pixel space: need to encode
