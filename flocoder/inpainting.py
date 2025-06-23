@@ -20,8 +20,11 @@ from PIL import Image
 from torch.utils.data import IterableDataset
 
 
-
 ########################  torch routines for mask encoding   ##################################
+
+def mysigmoid(x, eps=0.01):
+    # outputs from [-eps, 1+eps], perhaps to avoid saturation
+    return F.sigmoid(x) * (1 + 2*eps) - eps
 
 
 class DownsampleBlock(nn.Module):
@@ -78,7 +81,7 @@ class MaskEncoder(nn.Module):
             output_channels=4,  
             shrink_fac=4,      # Shrink per DownSampleBlock of which there are two, so square this
             mode='pool',       # Mode for the hard-shrink.  !='pool' means use F.interpolate
-            final_act=F.silu, # Activation before output. Intuitively we'd like mask_latents on [0,1] 
+            final_act=mysigmoid # Activation before output. Intuitively we'd like mask_latents on [0,1] 
                                #   but I won't force it: sigmoid might be too "harsh" ( saturation/vanishing gradients )
                                #   SILU offers a bit o' freedom while keeping values from getting "really negative". 
                                #   You may replace SILU with sigmoid, None, etc, to change this
@@ -88,17 +91,29 @@ class MaskEncoder(nn.Module):
         self.layers = nn.Sequential(
             DownsampleBlock(1, 16,  shrink_fac, mode),    # 1 -> 17 channels
             DownsampleBlock(17, 32, shrink_fac, mode),    # 17 -> 33 channels
-            nn.Conv2d(33, output_channels, 1)             # 33 -> 4 channels
+            nn.Conv2d(33, output_channels, 1)             # 33 -> output_channels
         )
         self.final_act = final_act
+
+        # For the doubly-shrunk mask
+        #if mode == 'pool':
+        #    self.double_shrink = nn.AvgPool2d(kernel_size=shrink_fac**2, stride=shrink_fac**2)
+        #else:
+        #    self.double_shrink = partial(F.interpolate, scale_factor=1.0/(shrink_fac**2), mode='bilinear')
+
 
     def forward(self, mask_pixels):  # e.g. shape = [batch, 1, 128, 128]
         if mask_pixels.dtype in [torch.uint8, torch.int32, torch.int64, torch.bool]: 
             mask_pixels = mask_pixels.float()
-        mask_latents = self.layers(mask_pixels)  # e.g, shape of [batch, 4, 8, 8]
+        learned_features = self.layers(mask_pixels)  # e.g, shape of [batch, 4, 8, 8]
         if self.final_act is not None: 
-            mask_latents = self.final_act(mask_latents)
+            learned_features = self.final_act(learned_features)
+        
+        #doubly_shrunk = self.double_shrink(mask_pixels)
+        #mask_latents = torch.cat([doubly_shrunk, learned_features], dim=1)   # "red"  channel will show doubly-shunk mask, other 3 channels are learned features
+        mask_latents = learned_features
         return mask_latents
+
 
 
 
@@ -129,10 +144,11 @@ def simulate_brush_stroke(size=(128,128), num_strokes=1, brush_size=None, max_br
     mask = np.zeros(size)
     for s in range(num_strokes):
         bs = brush_size if brush_size is not None else np.random.randint(3, max_brush_size)
-        x, y = np.random.randint(0, size[0]), np.random.randint(0, size[1])  # No padding
+        x = np.random.randint(0, size[0]) 
+        y = np.random.randint(size[1]//3, 2*size[1]//3)  # start around the middle 2/3 vertically
         stroke_length = np.random.randint(100, 300)
         direction = np.random.uniform(-np.pi/10, np.pi/10)
-        if x > size[0]/2: direction += np.pi
+        if x > size[0]/2: direction += np.pi  # if starting in the left, head right, and vice versa
         dir_change_std = 0.04  # in radians. 
         for _ in range(stroke_length):
             direction += np.random.normal(0, dir_change_std)
@@ -150,36 +166,41 @@ def simulate_brush_stroke(size=(128,128), num_strokes=1, brush_size=None, max_br
     return mask
 
 
-def generate_rectangles(size=(128,128), n_max=8, max_size_ratio=0.3):
+def generate_rectangles(size=(128,128), max_size_ratio_x=0.8, max_size_ratio_y=0.3):
     mask = np.zeros(size)
-    max_w, max_h = int(size[0] * max_size_ratio), int(size[1] * max_size_ratio)
-    pad_x, pad_y = max_w, max_h  # Leave room for max rectangle size
-
-    for _ in range(np.random.randint(1, n_max+1)):
-        x = np.random.randint(0, size[0] - pad_x)
-        y = np.random.randint(0, size[1] - pad_y)
-        w = np.random.randint(5, max_w)
-        h = np.random.randint(5, max_h)
-        mask[x:x+w, y:y+h] = 1
-    return mask
+    max_w, max_h = int(size[0] * max_size_ratio_x), int(size[1] * max_size_ratio_y)
+   
+    min_rects, max_rects = 2, 10   # most rects will "miss" the notes anyway, so more is good
+    min_rect_dim = 3
+    for _ in range(np.random.randint(min_rects, max_rects+1)):
+        w =  np.random.randint(min_rect_dim, max_w)
+        h =  np.random.randint(min_rect_dim, max_h)
+        x = np.random.randint(0, size[0] - w)
+        y = np.random.randint(0, size[1] - h)  # not much need to mask outsize the middle
+        mask[x:min(size[0], x+w), y:min(size[1], y+h)] = 1
+    return mask.T # .T bc numpy has x & y reversed
 
 
 
 def generate_mask(size=(128,128), 
         mask_type = '',  # can specify a mask algorithm name or else it'll be randomly chosen according to choices & p
-        choices = ['brush', 'rectangles', 'total', 'noise', 'nothing'],  # names of different kinds of masks  to choose from
-        p = [0.65, 0.15, 0.15, 0.049, 0.001],    # probabilities for each kind of mask
+        choices = ['total', 'brush', 'rectangles', 'noise', 'nothing'],  # names of different kinds of masks  to choose from
+        p=        [ 0.3,    0.4,      0.2,         0.05,    0.05],      # probabilities for each kind of mask
+        #p=        [ 0.01,    0.02,      0.87,         0.05,    0.05],      # probabilities for each kind of mask
         to_tensor=True, device='cpu', debug=False):
     """Ideally we want something that resembles human-drawn "brush strokes" with a circular cross section"""
-    if mask_type == '':  mask_type = np.random.choice(choices, p=p)
+    if mask_type == '':  
+        mask_type = np.random.choice(choices, p=p)
     if debug: print("mask_type = ",mask_type)
-    if mask_type == 'brush':
-        mask = simulate_brush_stroke(size, num_strokes=np.random.randint(1, 4))
+
+    if mask_type == 'total': # all mask = unconditional generation
+        mask = np.ones(size)
+    elif mask_type == 'brush':
+        min_strokes, max_strokes = 2, 5
+        mask = simulate_brush_stroke(size, num_strokes=np.random.randint(min_strokes, max_strokes+1))
     elif mask_type == 'rectangles':
         mask = generate_rectangles(size)
-    elif mask_type == 'total': # all mask = unconditional generation
-        mask = np.ones(size)
-    elif mask_type == 'noise': # no mask = no-op, no generation = boring
+    elif mask_type == 'noise': # no mask = no-op, no generation = boring, target=source
         mask = np.random.rand(*size) > 0.7
     elif mask_type == 'nothing': # no mask = no-op, no generation = boring
         mask = np.zeros(size)

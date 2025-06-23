@@ -5,6 +5,15 @@ from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from omegaconf import OmegaConf
 
 
+def print_vram(tag=""):
+    """Print current VRAM usage"""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3  # GB
+        reserved = torch.cuda.memory_reserved() / 1024**3    # GB
+        print(f"VRAM {tag}: {allocated:.2f}GB allocated, {reserved:.2f}GB reserved")
+    else:
+        print(f"VRAM {tag}: CPU mode")
+
 
 
 def handle_config_path():

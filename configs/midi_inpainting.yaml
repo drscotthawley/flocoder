@@ -1,0 +1,52 @@
+# @package _global_
+defaults:
+  - common/base
+  - common/midi
+  - common/vqgan
+  - common/preencoding
+  - common/flow
+  - _self_
+
+
+# Override specific settings
+codec:
+  choice: "vqgan"
+  #learning_rate: 2.0e-5
+  #warmup_epochs: 5
+  learning_rate: 1.0e-4
+  warmup_epochs: 999999
+  commitment-weight: 0.6  # Higher for MIDI
+  lambda_ce: 4.0  # Higher cross-entropy for MIDI
+  lambda_mse: 4.0
+  lambda_perc: 5.0e-5 # perc loss has little meaning for midi PRs
+  lambda_spec: 0.0  # could use but don't need
+  project_name: "fc-gray-vqgan-midi"
+  # grayscale so no onsets
+  in_channels: 1
+  add_onsets: False
+  num_downsamples: 4
+  # try 3d for viz
+  vq_embedding_dim: 4
+  codebook_levels: 2
+  vq_num_embeddings: 32
+  # curriculum learning for higher compression
+  later_downsamples: 4
+  switch_epoch: 50
+  
+
+preencoding:
+  data: "/data/POP909_images"
+  vqgan_checkpoint: "vqgan_best.pt"
+  augs_per: 2048
+  quantize: true
+
+
+
+flow:
+  data: "/data/POP909_images_encoded_vqgan_inpainting"
+  batch_size: 2048 
+  learning_rate: 1.0e-3
+  unet:
+    n_classes: 0
+    condition: false
+  project_name: "inpaint-midi-flow"

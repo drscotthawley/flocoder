@@ -8,22 +8,49 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 
 from .patch_discriminator import PatchDiscriminator
 from .vqgan_plus import VQGANPlusPatchDiscriminator
-from .general import ldcfg
+from .general import ldcfg, print_vram
 
 ### Related to losses/differentiable metrics
 # Note: not all of these actually get used all the time... 
 
 
-
 from geomloss import SamplesLoss
-sinkhorn_fn = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)
 
-def sinkhorn_loss(target, gen, max_B=None, device='cuda'):
+
+def sinkhorn_loss_chunked(target, gen, chunk_size=256, device='cuda'):
+    """Chunked sinkhorn to reduce memory usage"""
+    assert target.shape == gen.shape, f"target.shape {target.shape} != gen.shape {gen.shape}"
+    sinkhorn_fn = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)
+
+    total_loss, num_chunks = 0.0, 0
+    for i in range(0, target.shape[0], chunk_size):
+        end_idx = min(i + chunk_size, target.shape[0])
+        target_chunk = target[i:end_idx].reshape(end_idx - i, -1).to(device)
+        gen_chunk = gen[i:end_idx].reshape(end_idx - i, -1).to(device)
+
+        chunk_loss = sinkhorn_fn(target_chunk, gen_chunk).item()
+        total_loss += chunk_loss
+        num_chunks += 1
+
+        del target_chunk, gen_chunk
+        torch.cuda.empty_cache()
+
+    return total_loss / num_chunks
+
+def sinkhorn_loss(target, gen, max_B=None, device='cuda', chunk=False, debug=False):
+    if chunk: return sinkhorn_loss_chunked(target, gen, device=device)
+
+    sinkhorn_fn = SamplesLoss(loss="sinkhorn", p=2, blur=0.05)
     # usage: metrics['sinkhorn'] = sinkhorn_loss(target, integrator_outputs)
     # max_B limits eval batch size bc Sinkhorn calc can be slow, max_B=None means use whole batch
     assert target.shape == gen.shape, f"target.shape {target.shape} != gen.shape {gen.shape}"
     B = target.shape[0] if max_B is None else min(target.shape[0], max_B) 
     t_vec, g_vec = [x[:B].reshape(B, -1).to(device) for x in (target, gen)]
+
+    if debug: # : check value ranges
+        print(f"sinkorn_loss: Target:    mean={t_vec.mean():.3f}, std={t_vec.std():.3f}, range=[{t_vec.min():.3f}, {t_vec.max():.3f}]")
+        print(f"sinkorn_loss: Generated: mean={g_vec.mean():.3f}, std={g_vec.std():.3f}, range=[{g_vec.min():.3f}, {g_vec.max():.3f}]")
+  
     return sinkhorn_fn(t_vec, g_vec).item()
 
 
@@ -228,19 +255,45 @@ class AdversarialLoss(nn.Module):
 
 #### Non-differentiable metrics --- 
 
+def to_uint8(x):
+    # used by fid_score calculators, below
+    x = x.clone().detach()  # Ensure no gradients
+    x -= x.amin(dim=(1,2,3), keepdim=True)
+    x /= x.amax(dim=(1,2,3), keepdim=True).clamp(min=1e-5)
+    return (x * 255).clamp(0, 255).to(torch.uint8)
+
+@torch.no_grad()
+def fid_score_chunked(real, fake, chunk_size=256, device='cuda'):
+    """FID with chunked processing"""
+    fid_calculator = FrechetInceptionDistance(feature=2048).to(device)
+    fid_calculator.reset()
+
+    # Process in chunks
+    for i in range(0, real.shape[0], chunk_size):
+        end_idx = min(i + chunk_size, real.shape[0])
+        real_chunk = to_uint8(real[i:end_idx])
+        fake_chunk = to_uint8(fake[i:end_idx])
+
+        if real_chunk.shape[1] == 1:
+            real_chunk = real_chunk.repeat(1, 3, 1, 1)
+            fake_chunk = fake_chunk.repeat(1, 3, 1, 1)
+
+        fid_calculator.update(real_chunk, real=True)
+        fid_calculator.update(fake_chunk, real=False)
+
+        # Clear chunk memory
+        del real_chunk, fake_chunk
+        torch.cuda.empty_cache()
+
+    return fid_calculator.compute().item()
 
 
 @torch.no_grad()
-def fid_score(real, fake, device='cuda'):
+def fid_score(real, fake, device='cuda', chunk=False):
+    if chunk: return fid_score_chunked(real, fake, device=device)
+
     fid_calculator = FrechetInceptionDistance(feature=2048)  
     fid_metric, real, fake = fid_calculator.to(device), real.to(device), fake.to(device)
-
-    def to_uint8(x):
-        x = x.clone()
-        x -= x.amin(dim=(1,2,3), keepdim=True)
-        x /= x.amax(dim=(1,2,3), keepdim=True).clamp(min=1e-5)
-        x = (x * 255).clamp(0, 255).to(torch.uint8)
-        return x
 
     real_uint8 = to_uint8(real)
     fake_uint8 = to_uint8(fake)
@@ -420,5 +473,51 @@ def get_gradient_stats(discriminator):
         if p.grad is not None:
             total_norm += p.grad.data.norm(2).item() ** 2
     return {'d_grad_norm': math.sqrt(total_norm)}
+
+
+
+
+@torch.no_grad()
+# general utility called in evaluate_model 
+def compute_sample_metrics(pred_latents, target_latents,   # latent space
+                           decoded_pred, decoded_target,   # pixel space
+                           debug=False):
+    """Compute metrics between predicted and target samples"""
+    batch_size = min(pred_latents.shape[0], target_latents.shape[0])
+    if debug: print("compute_sample_metrics: using batch_size = ",batch_size)
+    if debug: print_vram("start")
+
+    with torch.no_grad():
+        if debug: print_vram("before sinkhorn_latent")
+        sinkhorn_latent = sinkhorn_loss(target_latents[:batch_size], pred_latents[:batch_size])
+        if debug: print_vram("after sinkhorn_latent, before sinkhorn_px")
+        sinkhorn_px = sinkhorn_loss(decoded_target, decoded_pred)  # pixel space
+        if debug: print_vram("after sinkhorn_px, before fid_px")
+    fid_px = fid_score(decoded_target, decoded_pred)  # pixel space
+    if debug: print_vram("after fid_px")
+
+    metrics = { 
+            'FID_px': fid_px, 
+            'sinkhorn': sinkhorn_latent, 
+            'sinkhorn_px': sinkhorn_px,
+            # the following mse's won't be very meaningful for a generative model, but if we're learning inpainting,... maybe
+            'mse': torch.nn.functional.mse_loss(pred_latents[:batch_size], target_latents[:batch_size]).item(),
+            'mse_px': torch.nn.functional.mse_loss(decoded_pred, decoded_target).item(),
+            'pred_mean': pred_latents.mean().item(),
+            'targ_mean': target_latents.mean().item(),
+            'pred_std': pred_latents.std().item(),
+            'targ_std': target_latents.std().item(),
+            'pred_px_mean': decoded_pred.mean().item(),
+            'targ_px_mean': decoded_target.mean().item(), 
+            'pred_px_std': decoded_pred.std().item(),
+            'targ_px_std': decoded_target.std().item(),
+        }
+
+    # Cleanup
+    del pred_latents, target_latents, decoded_pred, decoded_target
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
+
+    if debug: print("metrics =",metrics)
+    return metrics
 
 

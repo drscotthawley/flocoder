@@ -203,7 +203,7 @@ class MIDIImageDataset(ImageListDataset):
                  val_ratio=0.1,  # percentage for validation
                  seed=42,        # for reproducibility 
                  skip_versions=True, # if true, it will skip the extra versions of the same song
-                 total_only=True,    # if true, it will only keep the "_TOTAL_" version of each song
+                 total_only=False,    # if true, it will only keep the "_TOTAL_" version of each song
                  download=True,      # if true, it will download the datase -- leave this on for now
                  config=None,        # additional config info (starting to get too many kwargs!)
                  redraw_blank=True,  # if (transformed) image is blank, get a new one
@@ -237,29 +237,35 @@ class MIDIImageDataset(ImageListDataset):
         self.midi_img_file_list = fast_scandir(self.midi_img_dir, ['.png'])[1]  # get the list of image files
         if not self.midi_img_file_list:
             raise FileNotFoundError(f"No image files found in {self.midi_img_dir}")
-        if total_only:
+        if total_only:  # don't need this anymore. was used previously to avoid data leakage
             print("MIDIImageDataset: total_only = True. Grabbing only files with _TOTAL in the name")
             self.midi_img_file_list = [f for f in self.midi_img_file_list if '_TOTAL' in f]
         if debug: print(f"len(midi_img_file_list): {len(self.midi_img_file_list)}")
 
-        # POP909 can have multiple files with the same content (e.g. song_001_PIANO.png, song_001_TOTAL.png)
-        # the total_only kwarg (above) can help avoid data leakage between train and val subsets, but just to
-        # We need to do our own train/val splitting to avoid 'leakage'
-        if split != 'all':
-            # Extract unique song basenames (everything before instrument suffix)
-            song_basenames = list(set([os.path.basename(f).split('_')[0] for f in self.midi_img_file_list]))
+        if split != 'all': # split POP909 by directory names
+            import re
+            # Extract unique directory numbers
+            dir_nums = set()
+            for filepath in self.midi_img_file_list:
+                match = re.search(r'/(\d{3})/', filepath)
+                if match: dir_nums.add(int(match.group(1)))
+            dir_nums = sorted(dir_nums)
+            if debug: print(f"Found {len(dir_nums)} unique directories: {min(dir_nums)} to {max(dir_nums)}")
+
+            # Split directories by val_ratio
             random.seed(seed)
-            random.shuffle(song_basenames)
-            split_idx = int(len(song_basenames) * (1 - val_ratio))
-        
-            if split == 'train':
-                keep_songs = set(song_basenames[:split_idx])
-            else:  # split == 'val'
-                keep_songs = set(song_basenames[split_idx:])
-        
-            # Filter file list to only include files from selected songs
+            split_idx = int(len(dir_nums) * (1 - val_ratio))
+            #selected_dirs = sorted(list(set(dir_nums[:split_idx] if split == 'train' else dir_nums[split_idx:])))
+            selected_dirs = dir_nums[:split_idx] if split == 'train' else dir_nums[split_idx:] # this is simpler
+            if split=='val': print("val: len(selected_dirs) =",len(selected_dirs),", selected_dirs = ",selected_dirs)
+
+            
+            # Filter files by selected directories
             self.midi_img_file_list = [f for f in self.midi_img_file_list
-                              if os.path.basename(f).split('_')[0] in keep_songs]
+                                     if re.search(r'/(\d{3})/', f) and int(re.search(r'/(\d{3})/', f).group(1)) in selected_dirs]
+
+            if debug: print(f"Final file count for split '{split}': {len(self.midi_img_file_list)}")
+
 
         super().__init__(self.midi_img_file_list, transform=transform,   # We inherit from ImageListDataset
                          split='all', val_ratio=val_ratio, seed=seed, debug=debug) # split='all' since we already did the split

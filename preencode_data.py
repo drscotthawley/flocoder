@@ -244,4 +244,6 @@ def main(config) -> None:
 
 
 if __name__ == "__main__":
+    print("\nScript invoked via:\n", " ".join(sys.argv),"\n")
+    print("cwd is",os.getcwd())
     main()

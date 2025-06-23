@@ -13,17 +13,16 @@ from tqdm.auto import tqdm
 import hydra
 from omegaconf import OmegaConf
 
-from natten import use_fused_na
-use_fused_na()
 
-
-from flocoder.unet import Unet, MRUnet
+from flocoder.unet import Unet
+#from flocoder.unet import MRUnet # didn't help
 from flocoder.codecs import setup_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset, create_image_loaders
 from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 from flocoder.sampling import sampler, warp_time, evaluate_model
 from flocoder.hdit import ImageTransformerDenoiserModelV2, LevelSpec, MappingSpec, GlobalAttentionSpec
 from flocoder.codebook_analysis import CodebookUsageTracker
+from flocoder.inpainting import MaskEncoder
 
 
 print("Imports successful!") 
@@ -70,15 +69,66 @@ class EMA:
                 self.backup[name] = None
 
 
+def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
+         epoch=None, 
+         curriculum_epochs=10,    # for the early epochs, we just do unconditional gen which is easier for the model to learn than mask geometries
+         ): 
+    """main routine that unpacks dataloader batch (in train or val sets) to usable data
+       also does some mask encoding... whatever data-prep ops are likely to be the same for train and val sets
+    """
+    mask, mask_pixels = None, None
+    if pre_encoded:
+        data, class_cond = batch
+        if isinstance(data, dict):
+            target = data['target_latents'].to(device)
+            class_cond = class_cond.to(device)
+            if mask_encoder is not None:
+                mask_pixels = data['mask_pixels'] # use/save this for later debugging
+                if len(mask_pixels.shape) < 4: mask_pixels = mask_pixels.unsqueeze(1)  # add channel dim if needed (and it's typically needed)
+                mask = mask_pixels.to(device)
+                orig_source = data['source_latents'].to(device)
+        else:
+            target, class_cond = data.to(device), class_cond.to(device)
+    else:
+        _, _a, target, class_cond = batch
+        target, class_cond = target.to(device), class_cond.to(device)
+
+    noise = torch.randn_like(target)  # randn noise
+    if mask is None:  # no inpainting mask, start from noise
+        source = noise
+    elif mask is not None and mask_encoder is not None:  # for conditional inpainting
+        uncond_only_prob = 1.0 if epoch <= curriculum epochs  else  (curriculum_epochs - epoch + 1)/curriculum_epochs
+        #if epoch > curriculum_epochs:  
+        if np.random.rand() > uncond_only_prob:  # CL: probabilistically turn off partial maskng in facvor of uncond gen
+            # normal inpainting operation: 
+            if target.shape != mask.shape:  # if target in latent space, mask in pixel space: need to encode
+                mask = mask_encoder(mask)   # learnable mask latents
+        else: # unconditional generation. curriculum learning: initialize the flow model to do no mask-cond at first. source = pure gaussian noise
+            mask_pixels = torch.ones_like(mask_pixels) 
+            mask = torch.ones_like(target) 
+        source = orig_source + mask * (noise - orig_source)  # blend orig_source & noise via (learned) mask latents
+    else: 
+        assert False, "Unintended edge case"
+
+    return source, target, class_cond, mask, mask_pixels   # note we're never using pure/original source from dataset, always mixed
+
+
+
 def train_flow(config):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("train_flow: device =", device)
+
     # Extract parameters from config
-    data_path = f"{config.data}_encoded_{config.codec.choice}"
+    data_path = config.data
+    if not 'encoded' in data_path: 
+        data_path = f"{data_path}_encoded_{config.codec.choice}"
+    print("train_flow: data_path =",data_path)
     batch_size = ldcfg(config,'batch_size')
     n_classes = ldcfg(config.flow.unet,'n_classes', 0,verbose=True)
     if n_classes == 0: 
-        condition = False
+        class_condition = False
     else: 
-        condition = ldcfg(config,'condition',False)
+        class_condition = ldcfg(config,'condition',False)
     learning_rate = ldcfg(config,'learning_rate')
     epochs = ldcfg(config,'epochs')
     project_name = ldcfg(config,'project_name')
@@ -89,18 +139,13 @@ def train_flow(config):
     keep_gray = ldcfg(config.codec,'in_channels',3)==1
     print("is_midi, keep_gray =",is_midi, keep_gray)
 
-    # If we're using conditioning but don't have class info, warn and disable
-    if condition and (n_classes is None or n_classes <= 0):
-        print("Warning: Conditioning requested but no class information available. Disabling conditioning.")
-        condition = False
-        n_classes = 0
-    
     print(f"data_path = {data_path}")
     train_path, val_path = f"{data_path}/train",  f"{data_path}/val"
 
     print(f"Loading train data from: {train_path}")
-    pre_encoded=True 
-    if pre_encoded:
+    pre_encoded=True   # TODO: don't hard-code this, move to config
+    mask_encoder = None
+    if pre_encoded:  # main use case
         train_dataset = PreEncodedDataset(train_path, n_classes=n_classes)
         train_dataloader = DataLoader( dataset=train_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
                 pin_memory=True, persistent_workers=True,)
@@ -111,8 +156,27 @@ def train_flow(config):
         val_dataloader = DataLoader( dataset=val_dataset, batch_size=batch_size, shuffle=True, num_workers=12, 
                 pin_memory=True, persistent_workers=True,)
 
-        sample_item, _ = dataset[0]
-    else: 
+        # Inspect the data we'll be loading
+        print("\nInspecting sample data...")
+        batch = next(iter(train_dataloader))  # will be a list of something
+        batch_type = type(batch)
+        print("batch_type = ",batch_type) 
+        print("len(batch) = ",len(batch)) 
+        batch_data_type = type(batch[0])
+        print("batch_data_type = ",batch_data_type) 
+        if batch_data_type == dict: 
+            print("batch[0].keys() = ",batch[0].keys())
+            if 'mask_pixels' in batch[0].keys(): 
+                mask_encoder = MaskEncoder().to(device)
+                mask_pixels = batch[0]['mask_pixels']
+                print("we're inpainting")
+            sample_item = batch[0]['target_latents'][0]
+            print("sample_item.shape = ",sample_item.shape)
+        elif batch_date_type == tuple: 
+            print("we've got a (standard) tuple")
+            sample_item, _ = batch[0]  
+            print("sample_item.shape = ",sample_item.shape)
+    else:   # not recommended unless codec is a no-op
         image_size = ldcfg(config, 'image_size', 128)
         num_workers = ldcfg(config,'num_workers', 16)
         is_midi = True
@@ -124,16 +188,11 @@ def train_flow(config):
 
     latent_shape = tuple(sample_item.shape)
     C, H, W = latent_shape
-    print(f"Detected latent dimensions: C={C}, H={H}, W={W}")
+    print(f"Detected latent dimensions: C={C}, H={H}, W={W}\n")
 
-    print(f"Configuring model for {n_classes} classes, conditioning = {condition}\n")
-    #C, H, W = 4, 16, 16 # TODO: read this from data!!
 
     output_dir = f"output_{data_path.split('/')[-1]}-{H}x{W}" 
     os.makedirs(output_dir, exist_ok=True)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("device =", device)
 
     codec = setup_codec(config, device).eval() # Load codec for inference/evaluation
     # variables for tracking codebook usage
@@ -141,77 +200,75 @@ def train_flow(config):
     cb_size = ldcfg(config, 'vq_num_embeddings', 32)
     cb_tracker = CodebookUsageTracker(num_levels=cb_levels, codebook_size=cb_size)
 
+    inpainting = mask_encoder is not None
+    print(f"Configuring model for {n_classes} classes, class_condition = {class_condition}, mask_cond={mask_encoder is not None}\n")
     # Create flow model 
     dim_mults = ldcfg(config,'dim_mults', [1,2,4,4], verbose=True)
     if pre_encoded: # usually we want this
-        model = Unet( dim=H, channels=C, dim_mults=dim_mults, condition=condition, n_classes=n_classes,).to(device)
-    else:  # added to test HDiT
-        levels = [
-            LevelSpec(depth=2, width=256, d_ff=768, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0),
-            LevelSpec(depth=4, width=512, d_ff=1536, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0),
-        ]
+        model = Unet( dim=H, channels=C, dim_mults=dim_mults, n_classes=n_classes, mask_cond=inpainting).to(device)
+    else:  # added this to test HDiT
+        levels = [ LevelSpec(depth=2, width=256, d_ff=768, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0),
+                   LevelSpec(depth=4, width=512, d_ff=1536, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0), ]
         mapping = MappingSpec(depth=2, width=256, d_ff=768, dropout=0.0)
         print("model is ImageTransformerDenoiserModelV2")
-        model = ImageTransformerDenoiserModelV2(
-            levels=levels,  # List of LevelSpec objects
-            mapping=mapping,  # MappingSpec object
-            in_channels=C,
-            out_channels=C,
+        model = ImageTransformerDenoiserModelV2( levels=levels,  mapping=mapping, in_channels=C, out_channels=C,
             patch_size=(4, 4),  # or (2, 2) for smaller images
-            num_classes=n_classes if n_classes else 0,
-            mapping_cond_dim=0  # unless you have extra conditioning
-        )
+            num_classes=n_classes if n_classes else 0, mapping_cond_dim=0)  # unless you have extra conditioning
+
     model = model.to(device)
     total = sum(p.numel() for p in model.parameters())
     print(f"Model params: {total/1e9:.1f}B" if total >= 1e9 else f"Model params: {total/1e6:.1f}M")
-    print(f"Model conditioning enabled: {hasattr(model, 'condition') and model.condition}")
-    print(f"Model has cond_mlp: {hasattr(model, 'cond_mlp')}")
+    print(f"Model has class_cond_mlp: {hasattr(model, 'class_cond_mlp')}")
+    print(f"Model has mask_fusion_conv: {hasattr(model, 'mask_fusion_conv')}")
     print("")
 
 
     loss_fn = torch.nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    if mask_encoder is not None:
+        mask_encoder_lr = learning_rate*0.1  # slower mask enc learning for training stability
+        optimizer = optim.Adam([
+            {'params': model.parameters(), 'lr': learning_rate},
+            {'params': mask_encoder.parameters(), 'lr': mask_encoder_lr}
+        ])
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     #scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
-    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=200, T_mult=2, decay=0.3) 
+    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=30, T_mult=2, decay=0.3) 
 
     use_wandb = not no_wandb
     if use_wandb: 
         wandb.init(project=project_name, name=run_name, config=dict(config))
 
+    model.mask_encoder = mask_encoder # lazy: attach mask_encoder as an attribute to model, so EMA & checkpointing codes can stay the same ;-) 
     ema = EMA(model, decay=0.999, device=device)
 
     rolling_avg_loss, alpha = None, 0.99 
     eps = 0.001 # used in integration
-    for epoch in range(epochs):
+    for epoch in range(1, epochs+1):
         model.train()
     
         #short_loader = itertools.islice(train_dataloader, 10)  # Only take 10 batches  ; #temp for testing. import itertools
         #pbar = tqdm(short_loader, desc=f'Epoch {epoch}/{epochs}:', mininterval=0.25)
         pbar = tqdm(train_dataloader, desc=f'Epoch {epoch}/{epochs}:', mininterval=0.25)
+        mask_pixels, mask_cond, source = None, None, None  # mask_cond = mask_latents
         for batch in pbar:
-            if pre_encoded: 
-                batch, cond = batch
-            else: 
-                _, _a, batch, cond = batch 
 
-            batch, cond = batch.to(device), cond.to(device)
-            cond=None # TODO: this is hard-coded for MIDI data right now. fix this and make it adaptive, re. using config.conditioned
-            if random.random() < 0.1: cond = None # for classifier-free guidance: turn off cond signal sometimes
-            target = batch # alias
+            source, target, class_cond, mask_cond, mask_pixels = batch_to_data(batch, device, pre_encoded, mask_encoder, epoch=epoch)
+            class_cond=None # TODO: this is hard-coded for MIDI data right now. fix this and make it adaptive, re. using config.conditioned
+            if random.random() < 0.1: # for classifier-free guidance: turn off class_cond signal sometimes
+                class_cond = None 
 
             optimizer.zero_grad()
 
-            source = torch.randn_like(batch)
-            t = torch.rand(batch.shape[0], device=device) * (1 - eps) + eps
+            t = torch.rand(target.shape[0], device=device) * (1 - eps) + eps # see above for small eps, eg 0.001
             t = warp_time(t)          
 
-            t_expand = t.view(-1, 1, 1, 1).repeat(1, batch.shape[1], batch.shape[2], batch.shape[3])
-            x = t_expand * target + (1 - t_expand) * source
-
+            t_expand = t.view(-1, 1, 1, 1).repeat(1, target.shape[1], target.shape[2], target.shape[3])
+            x = (1 - t_expand) * source +  t_expand * target  # linterp between source & target = constant velocity
             v_guess = target - source    # constant velocity
-            t_scale = 999 if not pre_encoded else 1
+            t_scale = 999 if pre_encoded else 1
             #v_model = model(x, t * t_scale, aug_cond=None, class_cond=cond) for use with HDiT 
-            v_model = model(x, t * t_scale, cond=cond)
+            v_model = model(x, t * t_scale, cond={'class_cond': class_cond, 'mask_cond': mask_cond})
             loss = loss_fn(v_model, v_guess)
         
             if hasattr(model,'shrinker'):  # optional: if multiresolution UNet is available
@@ -222,12 +279,13 @@ def train_flow(config):
             loss.backward()
 
             # for training stability : adaptive LR and gradient clipping
-            if rolling_avg_loss is None:  
-                rolling_avg_loss = loss.item()
-            else:
-                rolling_avg_loss = alpha * rolling_avg_loss + (1 - alpha) * loss.item()
-                if loss.item() > 3 * rolling_avg_loss:  # Loss spike detected
-                    optimizer.param_groups[0]['lr'] *= 0.5  # Halve the learning rate
+            #  actually comment out adaptive LR as it conflicts with the LR scheduler in weird ways that mess up Adam
+            #if rolling_avg_loss is None:  
+            #    rolling_avg_loss = loss.item()
+            #else:
+            #    rolling_avg_loss = alpha * rolling_avg_loss + (1 - alpha) * loss.item()
+            #    if loss.item() > 3 * rolling_avg_loss:  # Loss spike detected
+            #        optimizer.param_groups[0]['lr'] *= 0.5  # Halve the learning rate
             
             if use_wandb:
                 wandb.log({
@@ -238,41 +296,43 @@ def train_flow(config):
             
             pbar.set_postfix({"Loss/train":f"{loss.item():.4g}"}, refresh=False)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping for stability
+            if mask_encoder is not None:
+                torch.nn.utils.clip_grad_norm_(mask_encoder.parameters(), max_norm=0.5)  # bit lower for stability
 
             optimizer.step()
             ema.update()
 
-        # Evals / Metrics / Viz
-        if (epoch < 20 ) or (epoch >= 20 and ((epoch + 1) % 10 == 0)):
+        #---- evals / metrics / viz
+        if ((epoch < 20 ) and (epoch % 1==0)) or (epoch >= 20 and (epoch % 10 == 0)):
             model.eval()
-            val_batch = next(iter(val_dataloader))  # Fixed missing parenthesis
-            if len(val_batch)>2: 
-                _, _a, val_batch, val_cond = val_batch
-            else:
-                val_batch, val_cond = val_batch
+            if mask_encoder is not None: mask_encoder.eval()
 
-            val_batch, val_cond = val_batch.to(device), val_cond.to(device)
+            batch = next(iter(val_dataloader))  # Fixed missing parenthesis
+            source, target, class_cond, mask_cond, mask_pixels = batch_to_data(batch, device, pre_encoded, mask_encoder, epoch=epoch)
 
-            # evals more frequently at beginning, then every 10 epochs later
             print("Generating sample outputs...")
+            eval_batch_size = target.shape[0]  # full batch now that we're chunking 768 # to avoid OOM
             eval_kwargs = {
                 'method':'rk4', 'use_wandb': use_wandb, 'output_dir': output_dir,
-                'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': 768,
-                'is_midi':is_midi, 'keep_gray':keep_gray,
-                'pre_encoded': pre_encoded
+                'n_classes': n_classes, 'latent_shape': latent_shape, 'batch_size': eval_batch_size,
+                'cond':{'class_cond': class_cond, 'mask_cond':mask_cond}, 
+                'is_midi':is_midi, 'keep_gray':keep_gray, 'pre_encoded':pre_encoded, 
+                'source':source, 'mask_pixels':mask_pixels,
             }
-            metrics = evaluate_model( model, codec, epoch, val_batch, target_labels=val_cond, tag="", cb_tracker=cb_tracker, **eval_kwargs)
+            metrics = evaluate_model( model, codec, epoch, target, tag="", cb_tracker=cb_tracker, **eval_kwargs)
 
             if epoch>50: # no point doing ema earlier
+                model.mask_encoder = mask_encoder # lazy: attach mask_encoder as an attribute to model so I don't have to write more code
                 ema.eval()
-                evaluate_model(model, codec, epoch, val_batch, target_labels=val_cond, tag="ema_", **eval_kwargs)
+                evaluate_model(model, codec, epoch, target, tag="ema_", cb_tracker=cb_tracker, **eval_kwargs)
                 ema.train()
             model.train()
+            if mask_encoder is not None: mask_encoder.train()
 
             if epoch % 5 == 0: cb_tracker.reset_all()  # accumulate codebook usage info over 5 epochs
 
         # Checkpoints
-        if (epoch + 1) % 25 == 0: # checkpoint every 25 epochs
+        if epoch % 25 == 0: # checkpoint every 25 epochs
             save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flow_", ckpt_dir=f"checkpoints", config=config)
             ema.eval()  # Switch to EMA weights
             save_checkpoint(model, epoch=epoch, optimizer=optimizer, keep=5, prefix="flowema_", ckpt_dir=f"checkpoints", config=config)
@@ -299,4 +359,6 @@ def main(config):
 
 
 if __name__ == "__main__":
+    print("\nScript invoked via:\n", " ".join(sys.argv),"\n")
+    print("cwd is",os.getcwd())
     main()

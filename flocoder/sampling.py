@@ -1,11 +1,16 @@
 import torch
+import numpy as np
 import wandb
 from scipy import integrate  # This is CPU-only
 from .viz import save_img_grid
-from .metrics import sinkhorn_loss, fid_score, g2rgb
+from .general import print_vram
+from .metrics import g2rgb, compute_sample_metrics
 from functools import partial
 import time
 import gc
+from torchvision.transforms import ToTensor
+import random
+
 
 
 def to_flattened_numpy(x):
@@ -61,10 +66,12 @@ def v_func_cfg(model,          # the flow model
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-    if cond is not None and cfg_strength is not None and cfg_strength != 0:
+    if cond and cond.get('class_cond') is not None and cfg_strength:
         #v_uncond = model(x, t_vec * t_scale, aug_cond=None, class_cond=None) # for HDiT
-        v_uncond = model(x, t_vec * t_scale, cond=None)
-        v = v_uncond + cfg_strength * (v - v_uncond)
+        cond_no_class = cond.copy()
+        cond_no_class['class_cond'] = None
+        v_no_class = model(x, t_vec * t_scale, cond=cond_no_class)
+        v = v_no_class + cfg_strength * (v - v_no_class)
 
     return v
 
@@ -72,60 +79,49 @@ def v_func_cfg(model,          # the flow model
 def generate_latents_rk4(model,          # the flow model 
                          shape,          # (batch_size, channels, height, width)
                          n_steps=50,     # integration steps
-                         cond=None,      # conditioning labels/embeddings
+                         cond=None,      # conditioning signals (dict)
                          cfg_strength=3.0, # classifier-free guidance strength
-                         debug=True,
+                         source=None,    # source data is noise unless otherwise specified
+                         init_latents=None,  # "init image" usage which is not the same as conditional inpainting
+                         init_strength=0.0, # integration will start at time 1-init_strength
+                         jitter_strength=0, # 0.001, # to make it a bit diffusion-y
+                         debug=False,
                          ):
     """Generate latents using RK4 integration - this 'sampling' routine is primarily used for visualization."""
-    if debug: print("generate_latents_rk4:start")
+    if debug: print("generate_latents_rk4:start, init_latents = ",None if init_latents is None else init_latents.shape)
     gc.collect()
     if torch.cuda.is_available:  # added to avoid CUDA OOM
         torch.cuda.empty_cache()   # try to free up vram
 
-    cond = None # todo remove this
     device, dtype = next(model.parameters()).device, next(model.parameters()).dtype 
     if debug: print("in generate_latents_rk4: device, dtype =",device, dtype)
-    current_points = torch.randn(shape, device=device, dtype=dtype)   # source = randn noise
-    ts = torch.linspace(0, 1, n_steps, device=device, dtype=dtype)
+
+    
+    current_points = source if source is not None else torch.randn(shape, device=device, dtype=dtype)   # starting source / randn noise
+    if init_latents is None: # normal operation
+        ts = torch.linspace(0, 1, n_steps, device=device, dtype=dtype)
+        jitter_strength = 0
+    else:  # inpainting
+        # actually the following logic includes the no init case, but i like to keep it separate for debugging
+        if debug: print(f"generate_latents_rk4: doing inpainting with init_latents.shape =",init_latents.shape) 
+        current_points = (1 - init_strength) * current_points + init_strength * init_latents # start from linterp between noise & target
+        n_steps = max(1, int(n_steps * (1.0 - init_strength)))                               # dont need as many steps
+        ts = torch.linspace(init_strength, 1.0, n_steps, device=device, dtype=dtype)         # starting time = init_strength
+
     if warp_time: ts = warp_time(ts)
     t_vec_template = torch.zeros(shape[0], device=device, dtype=dtype)  # pre-allocate for mem-efficient time-coord broadcast
     v_func = partial(v_func_cfg, model, cond, cfg_strength, t_vec_template)
+
+    if debug: print("generate_latents_rk4: starting integration from t =",ts[0],", n_steps =",n_steps)
     for i in range(len(ts)-1):
         current_points = rk4_step(v_func, current_points, ts[i], ts[i+1]-ts[i])
+        if random.random() < 0.1 and jitter_strength > 0:  # occasional jitter
+            current_points += torch.randn_like(current_points) * jitter_strength * (1-ts[i])  # Less noise as t→1
+
     nfe = n_steps * 4  # number of function evaluations, rk4 has 4
     return current_points, nfe
 
 
-#@torch.no_grad()
-#def generate_latents_rk45(model,            # the flow model
-#                          shape,            # (batch_size, channels, height, width) 
-#                          device,           # torch device
-#                          cond=None,        # conditioning labels/embeddings
-#                          cfg_strength=3.0, # classifier-free guidance strength  
-#                          eps=0.001):       # integration epsilon
-#    """Runge-Kutta method for integration. Original Source: Tadao Yamaoka"""
-#    rtol = atol = 1e-05
-#    model.eval()
-#    gc.collect()
-#    torch.cuda.empty_cache()
-#
-#    z0 = torch.randn(shape).to(device)
-#    
-#    def ode_func(t, x):
-#        x = from_flattened_numpy(x, shape).to(device).type(torch.float32)
-#        t_w = warp_time(t) 
-#        t_vec = torch.ones(shape[0], device=x.device) * t_w
-#        v = model(x, t_vec * 999, cond)                # if cond=None you get uncond
-#        if cond is not None and cfg_strength is not None and cfg_strength != 0:   # classifier-free guidance
-#            v_uncond = model(x, t_vec * 999, None)
-#            v = v_uncond + cfg_strength * (v - v_uncond) # cfg_strength ~= conditioning strength
-#        return to_flattened_numpy(v)
-#
-#    solution = integrate.solve_ivp(   # TODO: we could just do regular rk4 and maybe have it faster; time it
-#        ode_func, (eps, 1), to_flattened_numpy(z0), rtol=rtol, atol=atol, method="RK45")
-#    nfe = solution.nfev
-#    x = torch.tensor(solution.y[:, -1]).reshape(shape).type(torch.float32)
-#    return x, nfe
 
 
 @torch.no_grad()
@@ -133,26 +129,32 @@ def generate_latents(model,            # the flow model
                      shape,            # (batch_size, channels, height, width)
                      method='rk4',     # integration method: 'rk4' or 'rk45'
                      n_steps=50,       # number of steps (rk4 only)
-                     cond=None,        # conditioning labels/embeddings
+                     cond=None,        # conditioning signals (dict)
                      cfg_strength=3.0, # classifier-free guidance strength
-                     debug=True,
-                     device=None):     # torch device (auto-detected if None)
+                     device=None,     # torch device (auto-detected if None)
+                     source=None,     # possible non-gaussian source data
+                     init_latents=None,  # used for "init image" style integration
+                     init_strength=0.0,
+                     debug=False,
+                     ):
     """Generate latents using specified method"""
     if device is None: device = next(model.parameters()).device
-    if method == "rk45":
+    if method == "rk45": # bad idea i removed this
         return generate_latents_rk45(model, shape, device, cond, cfg_strength)
     else:  # default to rk4
         if debug: print("generate_latents: calling rk4 integrator")
-        return generate_latents_rk4(model, shape, n_steps, cond, cfg_strength)
+        return generate_latents_rk4(model, shape, n_steps, cond, cfg_strength, source=source, init_latents=init_latents, init_strength=init_strength)
 
 
-def decode_latents(codec,          # the codec/autoencoder model
+
+def _decode_latents(codec,          # the codec/autoencoder model
                    latents,        # latent tensors to decode
                    is_midi=False,  # whether this is MIDI data
                    keep_gray=False,# keep grayscale format for MIDI
                    device=None,
-                   debug=True): 
+                   debug=False): 
     """Decode latents to images"""
+    if debug: print_vram("decode_latents: before decoding")
     if device is None:
         try:
             device = next(codec.parameters()).device
@@ -160,47 +162,72 @@ def decode_latents(codec,          # the codec/autoencoder model
             device = latents.device
     if debug: print("decode_latents: device = ",device)
     decoded = codec.decode(latents.to(device))
+    if debug: print_vram("decode_latents: after decoding")
     return g2rgb(decoded, keep_gray=keep_gray) if is_midi else decoded
+
+
+def decode_latents(codec, latents, is_midi=False, keep_gray=False, device=None, chunk_size=128, debug=False):
+    """Decode latents in chunks to save VRAM"""
+    chunks = []
+    if debug: print_vram("decode_latents_chunked: start")
+    for i in range(0, latents.shape[0], chunk_size):
+        chunk = _decode_latents(codec, latents[i:i+chunk_size], is_midi=is_midi,
+                               keep_gray=keep_gray, device=device, debug=debug)
+        if debug: print_vram("decode_latents_chunked: after chunk")
+        chunks.append(chunk.cpu())
+        del chunk
+        torch.cuda.empty_cache()
+    if debug: print_vram("decode_latents_chunked: after loop, before result")
+    result = torch.cat(chunks, dim=0).to(latents.device)
+    if debug: print_vram("decode_latents_chunked: after result")
+    return result
 
 
 @torch.no_grad()
 def sampler(model, codec, method='rk4', batch_size=256, n_steps=100,
             cond=None, n_classes=0, latent_shape=(4,16,16), cfg_strength=3.0,
-            is_midi=False, keep_gray=False, device=None):
+            is_midi=False, keep_gray=False, device=None, 
+            source=None,   # possible non-
+            init_image=None,  # possible  "init image" 
+            init_strength=0.0, # integration will start at time 1-init_strength
+            debug=False,
+            ):
     """generates predicted latents and decodes them"""
     if device is None: device = next(model.parameters()).device
     codec_device = next(codec.parameters()).device
     assert device==codec_device, f"sampler, device mismatch: device = {device}, but  codec_device {codec_device}"
 
+    # code related to inpainting
+    init_latents = None
+    if init_image is not None: # Encode init image to latents
+        if debug: print("sampler: encoding init_image") 
+        if isinstance(init_image, str): init_image = Image.open(init_image) 
+        # Convert PIL to tensor and encode
+        #init_tensor = transforms.ToTensor()(init_image).unsqueeze(0).to(device)
+        #init_tensor = torch.tensor(np.array(init_image)).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
+        init_tensor = ToTensor()(init_image).unsqueeze(0).to(device)
+        init_latents = codec.encode(init_tensor)
+        if init_latents.shape[0] == 1 and batch_size > 1: # Expand to batch size if needed
+            init_latents = init_latents.repeat(batch_size, 1, 1, 1)
+
     shape = (batch_size,) + latent_shape
-    if cond is None and n_classes > 0:  # grid where each column is a single class (10 columns)
-        cond = torch.randint(n_classes, (10,)).repeat(batch_size // 10).to(device)
-    elif cond is not None:
-        cond = cond[:batch_size]  # only grab what we can show
+    if source is not None: source = source[:batch_size]
 
-    pred_latents, nfe = generate_latents(model, shape, method, n_steps, cond, cfg_strength, device=device)
+    if cond.get('class_cond')  is None and n_classes > 0:  # grid where each column is a single class (10 columns)
+        cond['class_cond'] = torch.randint(n_classes, (10,)).repeat(batch_size // 10).to(device)
+    elif cond.get('class_cond') is not None:
+        cond['class_cond'] = cond['class_cond'][:batch_size]  # grab only as many as we can analyze/evaluate/show
 
+    if cond.get('mask_cond') is not None: cond['mask_cond'] = cond['mask_cond'][:batch_size]
+
+    pred_latents, nfe = generate_latents(model, shape, method, n_steps, cond, cfg_strength, device=device, 
+            source=source, init_latents=init_latents, init_strength=init_strength)
+
+    if debug: print_vram("sampler: before decode_pred")
     decoded_pred = decode_latents(codec, pred_latents, is_midi, keep_gray, device=device)
+    if debug: print_vram("sampler: after decode_pred")
     return pred_latents, decoded_pred, nfe
 
-
-
-@torch.no_grad()
-def compute_sample_metrics(pred_latents,  target_latents,    # latent space
-                           decoded_pred,   decoded_target):  # pixel space
-    """Compute metrics between predicted and target samples"""
-    batch_size = min(pred_latents.shape[0], target_latents.shape[0])
-    print("compute_sample_metrics: using batch_size = ",batch_size)
-    
-    # Latent space metrics
-    with torch.no_grad():
-        sinkhorn_latent = sinkhorn_loss(target_latents[:batch_size], pred_latents[:batch_size])
-        sinkhorn_px = sinkhorn_loss(decoded_target, decoded_pred)  # pixel space
-    fid_px = fid_score(decoded_target, decoded_pred)  # pixel space
-
-    metrics = { 'metrics/sinkhorn': sinkhorn_latent, 'metrics/sinkhorn_px': sinkhorn_px, 'metrics/FID_px': fid_px }
-    print("metrics =",metrics)
-    return metrics
 
 
 @torch.no_grad()
@@ -208,7 +235,7 @@ def evaluate_model(model,            # the flow model to evaluate
                    codec,            # codec for decoding
                    epoch,            # current epoch (For logging)
                    target_latents,   # target samples for metrics 
-                   target_labels=None,   # labels for conditioning (optional)
+                   cond=None,        # conditioning signals, e.g. class labels
                    batch_size=256,   # number of samples to generate
                    n_classes=0,      # number of classes for conditioning
                    latent_shape=(4,16,16), # shape of latent space
@@ -220,8 +247,11 @@ def evaluate_model(model,            # the flow model to evaluate
                    cb_tracker=None,  # extra work tracking codebook usage
                    cfg_strength=3.0, # classifier-free guidance strength
                    output_dir="./",
+                   # TODO: ok we've got too many args at this point! 
                    use_wandb=True,   # send outputs to wandb
                    pre_encoded=True, # note for how we're getting our data
+                   source=None,      # source data, if any. Otherwise will use randn noise 
+                   mask_pixels=None, # only used for visualization/debugging
                    debug=False):
     """Generate samples and compute metrics for model evaluation"""
     model.eval(), codec.eval()
@@ -231,16 +261,21 @@ def evaluate_model(model,            # the flow model to evaluate
 
     latent_shape = target_latents.shape[-3:]
     shape = (batch_size,) + latent_shape
-    if debug: print("evaluate_model: shape =",shape)
-    
+    if debug: 
+        print("evaluate_model: shape =",shape)
+        print_vram("before calling sampler")  
     pred_latents, decoded_pred, nfe = sampler(model, codec,method=method, batch_size=batch_size,
-                                                 cond=target_labels, n_classes=0, latent_shape=latent_shape, cfg_strength=cfg_strength,
-                                                 is_midi=is_midi, keep_gray=keep_gray)
-    decoded_target = decode_latents(codec, target_latents[:batch_size], is_midi, keep_gray) 
+                                                 cond=cond, n_classes=0, latent_shape=latent_shape, cfg_strength=cfg_strength,
+                                                 is_midi=is_midi, keep_gray=keep_gray, source=source,)
 
+    print("Computing sample metrics...") 
+    if debug: print_vram("after sampler, before decoding target")
+    decoded_target = decode_latents(codec, target_latents[:batch_size], is_midi, keep_gray) 
+    if debug: print_vram("after decoding target")
     metrics = compute_sample_metrics(pred_latents, target_latents, decoded_pred, decoded_target)
+
     if cb_tracker is not None:
-        if debug: print("\nevaluate_model: performing codebook analysis. target_latents.device =",target_latents.device) 
+        print("Performing codebook analysis. target_latents.device =",target_latents.device) 
         # Track target latents
         z_compressed = target_latents.permute(0, 2, 3, 1).reshape(-1, target_latents.shape[1])
         z_q, indices, _ = codec.vq(z_compressed)
@@ -257,16 +292,27 @@ def evaluate_model(model,            # the flow model to evaluate
         if debug: print("back from analyze_codebooks")
 
     images = {'pred_latents':pred_latents, 'target_latents':target_latents, 'decoded_pred':decoded_pred, 'decoded_target':decoded_target}
+    if source is not None: 
+        decoded_source = decode_latents(codec, source[:batch_size], is_midi, keep_gray)
+        images.update({'source_latents':source[:batch_size], 'decoded_source':decoded_source})  
+
+    # Add mask visualization:
+    if cond and isinstance(cond, dict):
+        if 'mask_cond' in cond and cond['mask_cond'] is not None:
+            images['mask_latents'] = cond['mask_cond'][:batch_size]
+        if mask_pixels is not None:
+            mask_pixels = mask_pixels[:batch_size].float()
+            images['mask_pixels'] = mask_pixels
 
     # Save outputs
     for key, val in images.items():
         #if debug: print(f"   evaluate_model: saving outputs: {key}") 
         save_img_grid(val.cpu(), epoch, nfe, tag=f"{tag}{key}_{method}_{nfe}", use_wandb=use_wandb, output_dir=output_dir)
 
-    # Log metrics
     if use_wandb and metrics:
-        metrics['epoch'] = epoch
-        wandb.log(metrics)
+        wandb_metrics = {f'metrics/{k}': v for k, v in metrics.items()}
+        wandb_metrics['epoch'] = epoch
+        wandb.log(wandb_metrics)
 
     gc.collect()
     if torch.cuda.is_available(): 
