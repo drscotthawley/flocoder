@@ -8,9 +8,17 @@ defaults:
 
 # Dataset-specific config - common/if not present this gets downloaded
 data: "~/datasets/Oxford_Flowers102/images"
+inpainting: false
 
 # Override specific settings
 codec:
   choice: sd 
+
+preencode: 
+augs_per: 768
+
+flow:
+  unet:
+    n_classes: 102
 
 project_name: "fc-flow-flowers-sd"

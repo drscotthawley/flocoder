@@ -110,7 +110,7 @@ def process_dataset(codec, dataset, output_dir, batch_size, max_storage_bytes, n
         with tqdm(total=max_batches, desc=f"Processing [0.00/{max_storage_bytes/1024**3:.1f} GB (0%)]") as pbar:
             for batch_idx, batch in enumerate(dataloader):
                 if batch_idx >= max_batches or current_storage >= max_storage_bytes: break
-                if type(batch) == tuple:  # "standard" operation
+                if isinstance(batch, tuple) or isinstance(batch, list):  # "standard" operation
                     target_images, classes = batch
                 elif type(batch) == dict and inpainting:
                     target_images = batch['target_image']
@@ -204,7 +204,7 @@ def main(config) -> None:
     
     # Get configuration values with defaults
     data_path = config.data
-    inpainting=True # todo: move this somewhere like a config
+    inpainting=ldcfg(config,'inpainting',False) # can be used to create *conditional* inpainting dataset
     output_dir = f"{data_path}_encoded_{config.codec.choice}" if not ldcfg(config,'output_dir') else config.output_dir
     if inpainting: 
         output_dir += "_inpainting"
@@ -225,9 +225,9 @@ def main(config) -> None:
 
         if inpainting:  # this will make it return a dict
             #dataset = InpaintingDataset(dataset)
-            mask_kwargs = {'choices':['brush','rectangles','noise'], 'p':[0.55, 0.4, 0.05]} # leave out 'total' and 'nothing' for on-the-fly, later
-            print("creating InpaintingDataset with mask_kwargs =",mask_kwargs)
-            dataset = InpaintingDataset(dataset, mask_kwargs=mask_kwargs)
+            #mask_kwargs = {'choices':['brush','rectangles','noise'], 'p':[0.55, 0.4, 0.05]} # leave out 'total' and 'nothing' for on-the-fly, later
+            #print("creating InpaintingDataset with mask_kwargs =",mask_kwargs)
+            dataset = InpaintingDataset(dataset)#, mask_kwargs=mask_kwargs)
 
         split_output_dir = setup_output_dir(output_dir+f"/{split}")
         
