@@ -110,9 +110,10 @@ class NATTENBlock(nn.Module):
         
         if natten is None:
             raise ImportError("Please install NATTEN: pip install natten")
+        else: 
+            self.natten_version =  tuple(map(int, natten.__version__.split('.')[0:2]))  # (0, 20)
             
-    def _forward(self, x, debug=True):
-        if debug: print("NATTENBlock._forward: x.shape =",x.shape)
+    def _forward(self, x):
         B, C, H, W = x.shape
         identity = x
         
@@ -126,10 +127,12 @@ class NATTENBlock(nn.Module):
         qkv = qkv.permute(3, 0, 4, 1, 2, 5)  # 3 B heads H W dim
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        #attn = natten.functional.na2d_qk(q, k, self.kernel_size)
-        #attn = attn.softmax(dim=-1)
-        #x = natten.functional.na2d_av(attn, v, self.kernel_size)
-        x = natten.functional.na2d(q, k, v, kernel_size=self.kernel_size)
+        if self.natten_version < (0, 20):
+            attn = natten.functional.na2d_qk(q, k, self.kernel_size)
+            attn = attn.softmax(dim=-1)
+            x = natten.functional.na2d_av(attn, v, self.kernel_size)
+        else:
+            x = natten.functional.na2d(q, k, v, kernel_size=self.kernel_size)
             
         x = x.permute(0, 2, 3, 1, 4).reshape(B, H, W, C)
         x = self.proj(x)
@@ -175,22 +178,34 @@ class EncDecResidualBlock(nn.Module):
     def _forward(self, x):
         identity = x
         out = self.conv1(x)
+        if torch.isnan(out).any(): print("A: NaN after op")
         out = self.norm1(out)
+        if torch.isnan(out).any(): print("B: NaN after op")
         out = self.silu(out)
+        if torch.isnan(out).any(): print("C: NaN after op")
         out = self.dropout(self.dropout2d(out))
+        if torch.isnan(out).any(): print("D: NaN after op")
 
         if self.attn:
+            print(f"attn input stats: min={out.min():.6f}, max={out.max():.6f}, mean={out.mean():.6f}, std={out.std():.6f}")
             out = self.attn(out) 
+        if torch.isnan(out).any(): print("E: NaN after op")
 
         out = self.conv2(out)
+        if torch.isnan(out).any(): print("F: NaN after op")
         out = self.norm2(out)
+        if torch.isnan(out).any(): print("G: NaN after op")
 
         if self.downsample is not None:
             identity = self.downsample(x)
+        if torch.isnan(out).any(): print("H: NaN after op")
 
         out += identity
+        if torch.isnan(out).any(): print("I: NaN after op")
         out = self.silu(out)
+        if torch.isnan(out).any(): print("J: NaN after op")
         out = self.dropout(self.dropout2d(out))
+        if torch.isnan(out).any(): print("K: NaN after op")
         return out
 
     def forward(self, x):
@@ -229,25 +244,28 @@ class NoiseInjection(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
-                 internal_dim=256, vq_embedding_dim=4, inject_noise=True, use_checkpoint=False,):
+                 internal_dim=256, vq_embedding_dim=4, inject_noise=True, use_checkpoint=False,
+                 decoder_nonlocal=True):
         super().__init__()
         
-        decoder_layers = []
+         
+        decoder_layers = [SpatialNonLocalAttention(vq_embedding_dim)] if decoder_nonlocal else []
         noise_strength = 0.0# leave this off for now and just try Dropout #  0.01 if inject_noise else 0.0
 
         # projection
         current_channels = hidden_channels * (2 ** (num_downsamples - 1))
+
         next_layers = [
-            SpatialNonLocalAttention(vq_embedding_dim),
             nn.Conv2d(vq_embedding_dim, internal_dim, 1),  # Expand to internal_dim
             nn.GroupNorm(gn_groups(vq_embedding_dim, internal_dim), internal_dim),
             nn.SiLU(),
             nn.Conv2d(internal_dim, current_channels, 1),  # Then to current_channels
             NoiseInjection(current_channels, noise_strength=0.01), # try to inject a little generative "information"
-            EncDecResidualBlock(current_channels, current_channels, 
-                            use_checkpoint=use_checkpoint, attention='full',  dropout_rate=0.05)
         ]
         decoder_layers.extend(next_layers)
+        attn = 'full' if decoder_nonlocal else 'natten'
+        decoder_layers.extend([EncDecResidualBlock(current_channels, current_channels, 
+                            use_checkpoint=use_checkpoint, attention=attn,  dropout_rate=0.05)])
 
         # Upsampling blocks
         for i in range(num_downsamples - 1, -1, -1):
@@ -364,17 +382,28 @@ class SpatialNonLocalAttention(nn.Module):
        return checkpoint(self._forward, x, use_reentrant=False) if x.requires_grad and self.training else self._forward(x)
 
 
+class DebuggingSequential(nn.Sequential):
+    def forward(self, x):
+        for i, layer in enumerate(self):
+            x = layer(x)
+            if torch.isnan(x).any():
+                print(f"NaN detected after encoder layer {i}: {layer}")
+                break
+        return x
+
+
 class VQVAE(nn.Module):
     def __init__(self, in_channels=3, hidden_channels=256, num_downsamples=3, 
                  vq_num_embeddings=512, internal_dim=256, codebook_levels=3, 
                  vq_embedding_dim=4, commitment_weight=0.25,
-                 use_checkpoint=False, no_natten=False):
+                 use_checkpoint=False, no_natten=False,
+                 encoder_nonlocal=False, decoder_nonlocal=True):
         super().__init__()
         global natten 
 
         if no_natten:
             natten = None
-        
+        self.in_channels = in_channels 
         self.num_downsamples = num_downsamples
         self.use_checkpoint = use_checkpoint
         self.codebook_levels = codebook_levels
@@ -390,6 +419,7 @@ class VQVAE(nn.Module):
                 attention = 'natten'
             else: 
                 attention = None
+            print(f"Building encoder: i = {i}, attention={attention}") 
             encoder_layers.append(EncDecResidualBlock(in_channels_current, out_channels, 
                                 stride=2, use_checkpoint=use_checkpoint, attention=attention, dropout_rate=0.05))
             
@@ -408,8 +438,9 @@ class VQVAE(nn.Module):
             nn.SiLU(),
             nn.Conv2d(vq_embedding_dim, vq_embedding_dim, 3, padding=1)]
         encoder_layers.extend(compress_layers)
-        encoder_layers.append(SpatialNonLocalAttention(vq_embedding_dim)) 
-        self.encoder = nn.Sequential(*encoder_layers)
+        if encoder_nonlocal: encoder_layers.append(SpatialNonLocalAttention(vq_embedding_dim)) 
+        #self.encoder = nn.Sequential(*encoder_layers)
+        self.encoder = DebuggingSequential(*encoder_layers)
         self.info = None
 
 
@@ -446,6 +477,7 @@ class VQVAE(nn.Module):
             internal_dim=internal_dim,
             vq_embedding_dim=vq_embedding_dim,
             use_checkpoint=use_checkpoint,
+            decoder_nonlocal=decoder_nonlocal,
         )
 
         self.init_codebook_usage()
@@ -457,24 +489,35 @@ class VQVAE(nn.Module):
         self.usage_count = 0
 
 
-    def encode(self, x, debug=False):
-        if debug: print("\n vqvae: starting self.encode", flush=True)
-        if self.use_checkpoint and self.training:
-            return checkpoint(self.encoder, x, use_reentrant=False)
-        if debug: print("vqvae: calling self.encoder", flush=True)
+    def encode(self, x, debug=True):
+        if debug: print("\n vqvae: starting self.encode.  x.shape, x.min, xmax =", x.shape,x.min().item(), x.max().item(), flush=True)
+        if False and self.use_checkpoint and self.training:
+            if debug: print("vqvae.encode: calling checkpoint", flush=True)
+            z = checkpoint(self.encoder, x, use_reentrant=False)
+            if debug: print("vqvae.encode: z.shape, z.min, z.max = ", z.shape, z.min().item(), z.max().item(), flush=True)
+            return z
+        if debug: print("vqvae: no checkpointing. calling self.encoder", flush=True)
         z = self.encoder(x)
-        if debug: print("encode: z.shape = ", z.shape, flush=True)
+        if debug: print("encode: z.shape, z.min, z.max = ", z.shape, z.min().item(), z.max().item(), flush=True)
         return z
 
     def quantize(self, z, debug=False):
         """Vector quantization: permute → flatten → VQ → restore shape → permute back"""
         z = z.permute(0, 2, 3, 1)
-        orig_shape = z.shape
+        permuted_shape = z.shape
         z = z.reshape(-1, z.shape[-1])
-        
-        z_q, self.indices, commit_loss = self.vq(z)
-        
-        z_q = z_q.view(orig_shape).permute(0, 3, 1, 2)
+        print(f"\nVQ input z stats: min={z.min():.6f}, max={z.max():.6f}, mean={z.mean():.6f}")
+        #if hasattr(self.vq, 'layers'):
+        #    for i, layer in enumerate(self.vq.layers):
+        #        cluster_size = layer._codebook.cluster_size
+        #        embed_avg = layer._codebook.embed_avg
+        #        print(f"Layer {i} cluster_size: min={cluster_size.min():.6f}, max={cluster_size.max():.6f}")
+        #        print(f"Layer {i} embed_avg: min={embed_avg.min():.6f}, max={embed_avg.max():.6f}")
+
+        z_q, self.indices, commit_loss = self.vq(z) # for backwards-compatbility, last-computed indices get stored as a class attribute
+
+
+        z_q = z_q.view(permuted_shape).permute(0, 3, 1, 2) # reshape to what decoder expects
         return z_q, commit_loss
     
     def decode(self, z_q, noise_strength=0.0):
@@ -482,9 +525,10 @@ class VQVAE(nn.Module):
         return self.decoder(z_q, noise_strength=noise_strength)
 
     @torch.no_grad()
-    def calc_distance_stats(self, z_compressed_flat, z_q):
+    def calc_distance_stats(self, z, z_q):
         """Diagnostic: Calculate distances between encoder outputs and codebook vectors"""
-        distances = torch.norm(z_compressed_flat.unsqueeze(1) -
+        z_flat = z_flat = z.view(-1, z.shape[1])
+        distances = torch.norm(z_flat.unsqueeze(1) -
                              self.vq.codebooks[0], dim=-1)  # For first codebook
         return {
             'codebook_mean_dist': distances.mean().item(),
@@ -505,8 +549,21 @@ class VQVAE(nn.Module):
         if self.info is None: 
             self.info = z.shape
             print("\nINFO: .encode output z.shape",self.info,"\n",flush=True)
+
+        # check for model nans before VQ operation
+        for name, param in self.named_parameters():
+            if torch.isnan(param).any():
+                print(f"forward: model check before quantize: NaN in parameter: {name}")
+                break
+        if torch.isnan(z).any(): print("forward: NaN detected in z") 
           
         z_q, commit_loss = self.quantize(z)
+        if torch.isnan(z_q).any(): print("forward: NaN detected in z_q") 
+        if torch.isnan(commit_loss).any(): print("forward: NaN detected in commit_loss") 
+        for name, param in self.named_parameters():
+            if torch.isnan(param).any():
+                print(f"forward: model check after quantize: NaN in parameter: {name}")
+                break
         
         x_recon = self.decode(z_q, noise_strength=noise_strength)
 
@@ -522,10 +579,12 @@ class SimpleResizeAE(nn.Module):
     """Just resizes tensors using bilinear interpolation. 
     For testing/exploration - reconstructions will be blocky/blurry."""
     def __init__(self, 
+                 in_channels=3,
                  latent_shape=(4,16,16), # tuple for latent dimensions. None for no-op/passthrough
                  mode='bicubic',         # interpolation/resampling mode
                  ): 
         super().__init__()
+        self.in_channels   = in_channels
         self.latent_shape  = latent_shape
         self.orig_shape    = None
         self.mode          = mode
@@ -575,6 +634,7 @@ class SD_VAE_Wrapper(nn.Module):
         super().__init__()
         from diffusers.models import AutoencoderKL  # lazy import, only use if needed
         self.vae = AutoencoderKL.from_pretrained(pretrained_model_name).eval()
+        self.in_channels = 3
 
     def encode(self, x):
         """Encode images to latent space."""

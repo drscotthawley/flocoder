@@ -8,11 +8,13 @@ import itertools
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import torch.nn.functional as F 
 import wandb
 from tqdm.auto import tqdm
 import hydra
 from omegaconf import OmegaConf
 import numpy as np
+import math
 
 from flocoder.unet import Unet
 #from flocoder.unet import MRUnet # didn't help
@@ -22,7 +24,8 @@ from flocoder.general import save_checkpoint, keep_recent_files, handle_config_p
 from flocoder.sampling import sampler, warp_time, evaluate_model
 from flocoder.hdit import ImageTransformerDenoiserModelV2, LevelSpec, MappingSpec, GlobalAttentionSpec
 from flocoder.codebook_analysis import CodebookUsageTracker
-from flocoder.inpainting import MaskEncoder
+from flocoder.inpainting import MaskEncoder, mask_blending, approx_AL
+from flocoder.ot import compute_ot_pairing
 
 
 print("Imports successful!") 
@@ -89,11 +92,12 @@ def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
          epoch=None, 
          curriculum_epochs=10,    # for the early epochs, we just do unconditional gen which is easier for the model to learn than mask geometries
          extend_epochs=20,
+         blank_latents=None,  # encoded equivalent of no midi data
          ): 
     """main routine that unpacks dataloader batch (in train or val sets) to usable data
        also does some mask encoding... whatever data-prep ops are likely to be the same for train and val sets
     """
-    mask, mask_pixels = None, None
+    source, mask, mask_pixels = None, None, None
     if pre_encoded:
         data, class_cond = batch
         if isinstance(data, dict):
@@ -110,12 +114,22 @@ def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
         _, _a, target, class_cond = batch
         target, class_cond = target.to(device), class_cond.to(device)
 
+    if source is not None: 
+        A_L = approx_AL(source, target) # little check: 
+
     noise = torch.randn_like(target)  # randn noise
-    if mask is None:  # no inpainting mask, start from noise
+
+    use_noise = True
+    if not use_noise: # ignore mask, just map source to target
+        mask, mask_pixels = None, None
+    elif use_noise and mask is None:  # no inpainting mask, start from noise
         source = noise
     elif mask_pixels is not None and mask_encoder is not None:  # for conditional inpainting
         # we can do curriculum learning and/or on-the-fly data augmentation by overwriting the mask & source info...
-        p_ones, p_zeros = 0.3, 0.02
+        #p_ones, p_zeros = 0.3, 0.02
+        p_ones, p_zeros = 0.0, 0
+
+        curriculum_epochs, extend_epochs = 0, 0  # TODO: remove this temporary test
         if epoch <= curriculum_epochs:    # curriculum learning: start with unconditional generation
             #return noise, target, class_cond, None, None  # simple curriculum: hard switch
 
@@ -126,15 +140,45 @@ def batch_to_data(batch, device, pre_encoded=True, mask_encoder=None,
             p_ones = 0.1 + (0.3 - 0.1) * progress  # 0.1 -> 0.3
             p_zeros = 0.02 * progress  # 0 -> 0.02
 
-        oi, zi, ni = otf_gen_aug_indices(mask, p_ones, p_zeros)
-        if len(oi) > 0: # ones indices  - uncond generation
-            mask_pixels[oi], source[oi] = 1, noise[oi]  # for the 1's, we use pytorch's broadcasting of scalars. (note: mask[oi] already=1) 
-        if len(zi) > 0: # zeros indices  - no inpainting/gen
-            mask_pixels[zi], source[zi] = 0, target[zi]
+        # apply on-the-fly mask augmentation to inputs (source & mask_pixels)
+        use_otf = True
+        if use_otf: 
+            oi, zi, ni = otf_gen_aug_indices(mask, p_ones, p_zeros)
+            if len(oi) > 0: # ones indices  - uncond generation
+                mask_pixels[oi] = 1
+                if blank_latents is not None: 
+                    source[oi] = blank_latents[0] # (broadcast) Don't set source to noise or 0's, Set it encoded blank image
+                else:
+                    print("Warning: you really need blank_latents to do this aug stuff")
+            if len(zi) > 0: # zeros indices  - no inpainting/gen. source=target
+                mask_pixels[zi], source[zi] = 0, target[zi]
+
+        
         mask = mask_encoder(mask_pixels.to(device))
-        source = source + mask*(noise - source)  # blending equation 
+        #source = source + mask*(noise - source)      # blending equation, assumes mask=0 for source, mask=1 for noise 
+        source = mask_blending(source, mask, noise)   # generalization wrapper for blending equation
     else: 
-        assert False, "Unintended edge case"
+        assert False, f"Unintended edge case. use_noise={use_noise}; mask_pixels, mask_encoder and mask are not None : {mask_pixels is not None}, {mask_encoder is not None}, {mask is not None}"
+
+    # pairing schemes : ot / all shuffle / % shuffle
+    use_ot = True
+    if use_ot:
+         ot_indices = compute_ot_pairing(source, target)
+         target = target[ot_indices]
+    shuffle_p = 0 #0.5  # shuffling the data
+    if shuffle_p > 0: # for source=noise, this makes no difference
+        all_or_nothing = False
+        if all_or_nothing:  # some % of the time, either shuffle whole batch or don't
+            if random.random() < shuffle_p:
+                shuffle_idx = torch.randperm(target.shape[0])
+                # shuffle either source or target. mask will stay with the unshuffled one
+                target = target[shuffle_idx]
+                #source = source[shuffle_idx] # makes less sense to me
+        else:               # all the time, shuffle some percentage of the batch
+            shuffle_mask = torch.rand(target.shape[0]) < shuffle_p
+            shuffle_idx = torch.randperm(target.shape[0])
+            target[shuffle_mask] = target[shuffle_idx][shuffle_mask]
+
 
     return source, target, class_cond, mask, mask_pixels   # note we're never using pure/original source from dataset, always mixed
 
@@ -150,7 +194,7 @@ def train_flow(config):
         data_path = f"{data_path}_encoded_{config.codec.choice}"
     print("train_flow: data_path =",data_path)
     batch_size = ldcfg(config,'batch_size')
-    n_classes = ldcfg(config.flow.unet,'n_classes', 0,verbose=True)
+    n_classes = ldcfg(config.flow.unet,'n_classes', 0,verbose=True) # TODO: infer from dataset
     if n_classes == 0: 
         class_condition = False
     else: 
@@ -190,7 +234,7 @@ def train_flow(config):
         print("len(batch) = ",len(batch)) 
         batch_data_type = type(batch[0])
         print("batch_data_type = ",batch_data_type) 
-        if batch_data_type == dict: 
+        if isinstance(batch[0], dict): 
             print("batch[0].keys() = ",batch[0].keys())
             if 'mask_pixels' in batch[0].keys(): 
                 mask_encoder = MaskEncoder().to(device)
@@ -198,10 +242,15 @@ def train_flow(config):
                 print("we're inpainting")
             sample_item = batch[0]['target_latents'][0]
             print("sample_item.shape = ",sample_item.shape)
-        elif batch_data_type == tuple: 
-            print("we've got a (standard) tuple")
+        elif isinstance(batch[0],  (list, tuple)):
+            print("we've got a tuple/list for first elem of batch")
             sample_item, _ = batch[0]  
             print("sample_item.shape = ",sample_item.shape)
+        elif isinstance(batch, list) and isinstance(batch[0], torch.Tensor):
+            print("data is standard tensor, class") 
+            sample_item, _ = batch
+        else: 
+            assert False, f"Unexpected outcome! batch_type, batch_data_type = {batch_type}, {batch_data_type}" 
     else:   # not recommended unless codec is a no-op
         image_size = ldcfg(config, 'image_size', 128)
         num_workers = ldcfg(config,'num_workers', 16)
@@ -212,7 +261,8 @@ def train_flow(config):
         source_imgs, _, target_imgs, _b = batch
         sample_item = source_imgs[0]
 
-    latent_shape = tuple(sample_item.shape)
+    print("sample_item.shape =",sample_item.shape)
+    latent_shape = tuple(sample_item.shape[1:])
     C, H, W = latent_shape
     print(f"Detected latent dimensions: C={C}, H={H}, W={W}\n")
 
@@ -221,6 +271,14 @@ def train_flow(config):
     os.makedirs(output_dir, exist_ok=True)
 
     codec = setup_codec(config, device).eval() # Load codec for inference/evaluation
+
+    # sample codec  encode: blank midi data
+    with torch.no_grad():
+        image_size = ldcfg(config, 'image_size', 128)
+        blank_pixels = torch.zeros([1,codec.in_channels, image_size,image_size]).to(device) # todo doesn't work for sd
+        blank_latents = codec.encode(blank_pixels)  
+        print("blank_latents.min(), blank_latents.max() =", blank_latents.min().item(), blank_latents.max().item())
+    
     # variables for tracking codebook usage
     cb_levels = ldcfg(config, 'codebook_levels', 4)
     cb_size = ldcfg(config, 'vq_num_embeddings', 32)
@@ -251,15 +309,15 @@ def train_flow(config):
 
     loss_fn = torch.nn.MSELoss()
     if mask_encoder is not None:
-        mask_encoder_lr = learning_rate*0.1  # slower mask enc learning for training stability
+        mask_encoder_lr = learning_rate*0.1
         optimizer = optim.Adam([
             {'params': model.parameters(), 'lr': learning_rate},
             {'params': mask_encoder.parameters(), 'lr': mask_encoder_lr}
         ])
     else:
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    #scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
-    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=30, T_mult=2, decay=0.3) 
+    scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=50, T_mult=2, decay=0.6) # previously T_mult=1, decay=1
+    #scheduler = CosineAnnealingWarmRestartsDecay(optimizer, T_0=30, T_mult=2, decay=0.3) 
 
     use_wandb = not no_wandb
     if use_wandb: 
@@ -279,10 +337,13 @@ def train_flow(config):
         mask_pixels, mask_cond, source = None, None, None  # mask_cond = mask_latents
         for batch in pbar:
 
-            source, target, class_cond, mask_cond, mask_pixels = batch_to_data(batch, device, pre_encoded, mask_encoder, epoch=epoch)
-            class_cond=None # TODO: this is hard-coded for MIDI data right now. fix this and make it adaptive, re. using config.conditioned
-            if random.random() < 0.1: # for classifier-free guidance: turn off class_cond signal sometimes
-                class_cond = None 
+            source, target, class_cond, mask_cond, mask_pixels = batch_to_data(batch, device, pre_encoded, mask_encoder, epoch=epoch, blank_latents=blank_latents)
+            cond={'class_cond': class_cond, 'mask_cond': mask_cond}
+
+            #class_cond=None # TODO: this is hard-coded for MIDI data right now. fix this and make it adaptive, re. using config.conditioned
+            if random.random() < 0.1: # 0.1: # for classifier-free guidance: turn off cond signal sometimes
+                cond = None 
+                source = torch.randn_like(source)
 
             optimizer.zero_grad()
 
@@ -294,13 +355,20 @@ def train_flow(config):
             v_guess = target - source    # constant velocity
             t_scale = 999 if pre_encoded else 1
             #v_model = model(x, t * t_scale, aug_cond=None, class_cond=cond) for use with HDiT 
-            v_model = model(x, t * t_scale, cond={'class_cond': class_cond, 'mask_cond': mask_cond})
+            v_model = model(x, t * t_scale, cond)
             loss = loss_fn(v_model, v_guess)
-        
-            if hasattr(model,'shrinker'):  # optional: if multiresolution UNet is available
-                lowres_v_guess = model.shrinker(v_guess)
-                lowres_loss = loss_fn(model.bottleneck_target_hook, lowres_v_guess) # compare with hook
-                loss = loss + lambda_lowres * lowres_loss
+
+            #enforcing the 0/1 meaning for the mask: 
+            if mask_encoder is not None and mask_pixels is not None:
+                mask = mask_cond
+                ones_pixels = torch.ones_like(mask_pixels).to(device)
+                zeros_pixels = torch.zeros_like(mask_pixels).to(device)
+                ones_target = torch.ones_like(mask).to(device)
+                zeros_target = torch.zeros_like(mask).to(device)
+            
+                mask_loss = F.mse_loss(mask_encoder(ones_pixels), ones_target)
+                mask_loss += F.mse_loss(mask_encoder(zeros_pixels), zeros_target)
+                loss = loss + 1.0 * mask_loss  # adjust weight as needed
 
             loss.backward()
 
@@ -334,7 +402,20 @@ def train_flow(config):
             if mask_encoder is not None: mask_encoder.eval()
 
             batch = next(iter(val_dataloader))  # Fixed missing parenthesis
-            source, target, class_cond, mask_cond, mask_pixels = batch_to_data(batch, device, pre_encoded, mask_encoder, epoch=epoch)
+            source, target, class_cond, mask_cond, mask_pixels = batch_to_data(batch, device, pre_encoded, mask_encoder, epoch=epoch, blank_latents=blank_latents)
+
+            # calc loss on validation set 
+            with torch.no_grad():
+                t = torch.rand(target.shape[0], device=device) * (1 - eps) + eps # see above for small eps, eg 0.001
+                t = warp_time(t)
+                t_expand = t.view(-1, 1, 1, 1).repeat(1, target.shape[1], target.shape[2], target.shape[3])
+                x = (1 - t_expand) * source +  t_expand * target  # linterp between source & target = constant velocity
+                v_guess = target - source    # constant velocity
+                t_scale = 999 if pre_encoded else 1
+                #v_model = model(x, t * t_scale, aug_cond=None, class_cond=cond) for use with HDiT
+                v_model = model(x, t * t_scale, cond={'class_cond': class_cond, 'mask_cond': mask_cond})
+                val_loss = loss_fn(v_model, v_guess)
+                wandb.log( {"Loss/val": val_loss.item()})
 
             print("Generating sample outputs...")
             eval_batch_size = target.shape[0]  # full batch now that we're chunking 768 # to avoid OOM
@@ -347,15 +428,15 @@ def train_flow(config):
             }
             metrics = evaluate_model( model, codec, epoch, target, tag="", cb_tracker=cb_tracker, **eval_kwargs)
 
-            if epoch>50: # no point doing ema earlier
-                model.mask_encoder = mask_encoder # lazy: attach mask_encoder as an attribute to model so I don't have to write more code
+            if epoch > 5 and epoch % 2 == 0:  # give ema some time to build up
                 ema.eval()
-                evaluate_model(model, codec, epoch, target, tag="ema_", cb_tracker=cb_tracker, **eval_kwargs)
+                ema_metrics = evaluate_model(model, codec, epoch, target, tag="ema_", cb_tracker=cb_tracker, **eval_kwargs)
                 ema.train()
+
             model.train()
             if mask_encoder is not None: mask_encoder.train()
 
-            if epoch % 5 == 0: cb_tracker.reset_all()  # accumulate codebook usage info over 5 epochs
+            if epoch % 2 == 0: cb_tracker.reset_all()  # accumulate codebook usage info over this many epochs
 
         # Checkpoints
         if epoch % 25 == 0: # checkpoint every 25 epochs
