@@ -14,8 +14,8 @@ inpainting: false
 codec:
   choice: sd 
 
-preencode: 
-augs_per: 768
+preencoding:
+  augs_per: 768
 
 flow:
   unet:
