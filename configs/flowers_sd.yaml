@@ -15,7 +15,7 @@ codec:
   choice: sd 
 
 preencoding:
-  augs_per: 768
+  augs_per: 128
 
 flow:
   unet:
