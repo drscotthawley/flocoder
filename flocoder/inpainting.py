@@ -20,10 +20,121 @@ from PIL import Image
 from torch.utils.data import IterableDataset
 
 
+####################### implementation of CMU/Meta Algorithm 3 for inpainting ######
+import torch
+
+def dump_plot(Y_pred, Y):
+    """Plot Y_pred vs Y to visualize linearity"""
+    import matplotlib.pyplot as plt
+
+    # Flatten and move to CPU for plotting
+    y_pred_flat = Y_pred.detach().cpu().flatten()
+    y_flat = Y.detach().cpu().flatten()
+
+    # Subsample for plotting (too many points otherwise)
+    indices = torch.randperm(len(y_flat))[:10000]  # random 10k points
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(y_pred_flat[indices], y_flat[indices], alpha=0.3, s=1)
+    plt.xlabel("Y_pred (Linear Approximation)")
+    plt.ylabel("Y (True Values)")
+    plt.title("Linearity Check: Y_pred vs Y")
+    plt.plot([y_flat.min(), y_flat.max()], [y_flat.min(), y_flat.max()], 'r--', alpha=0.8)  # perfect line
+    plt.savefig("ypred_vs_y.png", dpi=150, bbox_inches='tight')
+    plt.close()
+    print("Saved linearity plot to ypred_vs_y.png")
+
+def dump_raw_plot(y_L, x1_L):
+    """Plot y_L vs x1_L to see raw relationship before linear approximation"""
+    import matplotlib.pyplot as plt
+    
+    # Flatten and move to CPU for plotting
+    y_flat = y_L.detach().cpu().flatten()
+    x1_flat = x1_L.detach().cpu().flatten()
+    
+    # Subsample for plotting
+    indices = torch.randperm(len(y_flat))[:10000]  # random 10k points
+    
+    plt.figure(figsize=(8, 6))
+    plt.scatter(x1_flat[indices], y_flat[indices], alpha=0.3, s=1)
+    plt.xlabel("x1_L (Target/Clean)")
+    plt.ylabel("y_L (Source/Masked)")
+    plt.title("Raw Relationship: y_L vs x1_L")
+    plt.savefig("yL_vs_x1L.png", dpi=150, bbox_inches='tight')
+    plt.close()
+    print("Saved raw relationship plot to yL_vs_x1L.png")
+
+
+def approx_AL(source, target, debug=True):  # try to get the effect of pixel-wise mask but in latent space
+
+    y_L, x1_L = source, target
+    X = x1_L.view(x1_L.shape[0], -1)  # [2048, 256]
+    Y = y_L.view(y_L.shape[0], -1)    # [2048, 256]
+
+    # Solve: Y = X @ A_L.T  =>  A_L: [256, 256]
+    A_L = torch.linalg.lstsq(X, Y).solution.T  # [256, 256]
+
+    if debug:
+        Y_pred = X @ A_L.T  # Batch matrix multiply
+        mse = torch.mean((Y_pred - Y)**2)  # True MSE
+        rel_error = torch.norm(Y_pred - Y) / torch.norm(Y)  # Relative error
+        print(f"Reconstruction MSE: {mse:.6f}, Relative error: {rel_error:.3f}")
+
+        if not hasattr(approx_AL, 'made_plot'):
+            approx_AL.made_plot = True
+            dump_plot(Y_pred, Y)
+            dump_raw_plot(y_L, x1_L)
+
+    return A_L
+
+
+
+def algorithm3(v,           # velocity field output from pretrained model at (x, tp)
+               x,           # current state x_t during ODE integration  
+               t,           # initial time (fixed, for conditional OT path params)
+               tp,          # current integration time t'
+               y,           # noisy measurement (observed data)
+               A,           # measurement matrix (1-mask for inpainting)
+               sigma_y=0.05, # measurement noise std dev (0 for noiseless)
+               gamma_t=1.0): # adaptive weights (1 = unadaptive)
+    """Algorithm 3: Training-free approach to solve inverse problems via flows with pretrained vector field"""
+    # Step 5: r²_t' = σ²_t' / (σ²_t' + α²_t')  
+    # For conditional OT: α_t = t, σ_t = 1-t
+    r_tp_sq = (1 - tp)**2 / (tp**2 + (1 - tp)**2)
+    
+    # Step 6: Convert vector field to x̂₁
+    # x̂₁ = (α_t d ln(α_t/σ_t)/dt)⁻¹ (v̂ - d ln σ_t/dt x_t)
+    # For conditional OT: d ln(α_t/σ_t)/dt = 1/(t(1-t)), d ln σ_t/dt = -1/(1-t)
+    alpha_t, sigma_t = tp, 1 - tp
+    d_ln_ratio_dt = 1 / (tp * (1 - tp))  # d ln(α_t/σ_t)/dt
+    d_ln_sigma_dt = -1 / (1 - tp)        # d ln σ_t/dt
+    
+    coeff_inv = 1 / (alpha_t * d_ln_ratio_dt)  # (α_t d ln(α_t/σ_t)/dt)⁻¹
+    x1_hat = coeff_inv * (v - d_ln_sigma_dt * x)
+    
+    # Step 7: ΠGDM correction 
+    # g = (y - Ax̂₁)ᵀ (r²_t' AAᵀ + σ²_y I)⁻¹ A ∂x̂₁/∂x_t'
+    residual = y - A @ x1_hat.flatten()  # flatten for matrix ops
+    cov_matrix = r_tp_sq * (A @ A.T) + sigma_y**2 * torch.eye(A.shape[0], device=x.device)
+    
+    # Assuming ∂x̂₁/∂x_t' ≈ I (identity) for simplicity
+    # In practice, this would require autograd for exact gradient
+    g_flat = residual @ torch.linalg.solve(cov_matrix, A)
+    g = g_flat.view_as(x)  # reshape back to image dimensions
+    
+    # Step 8: Correct unconditional vector field  
+    # v̂_corrected = v̂ + σ²_t d ln(α_t/σ_t)/dt γ_t g
+    correction_coeff = sigma_t**2 * d_ln_ratio_dt * gamma_t
+    v_corrected = v + correction_coeff * g
+    
+    return v_corrected
+
+
+
 ########################  torch routines for mask encoding   ##################################
 
 def mysigmoid(x, eps=0.01):
-    # outputs from [-eps, 1+eps], perhaps to avoid saturation
+    # outputs from [-eps, 1+eps], may help avoid saturation while still basically being a sigmoid
     return F.sigmoid(x) * (1 + 2*eps) - eps
 
 
@@ -100,7 +211,7 @@ class MaskEncoder(nn.Module):
             output_channels=4,  
             shrink_fac=4,      # Shrink per DownSampleBlock of which there are two, so square this
             mode='pool',       # Mode for the hard-shrink.  !='pool' means use F.interpolate
-            final_act=mysigmoid # Activation before output. Intuitively we'd like mask_latents on [0,1] 
+            final_act=F.sigmoid # Activation before output. Intuitively we'd like mask_latents on [0,1] 
                                #   but I won't force it: sigmoid might be too "harsh" ( saturation/vanishing gradients )
                                #   SILU offers a bit o' freedom while keeping values from getting "really negative". 
                                #   You may replace SILU with sigmoid, None, etc, to change this
@@ -110,15 +221,15 @@ class MaskEncoder(nn.Module):
         self.layers = nn.Sequential(
             DownsampleBlock(1, 16,  shrink_fac, mode),    # 1 -> 17 channels
             DownsampleBlock(17, 32, shrink_fac, mode),    # 17 -> 33 channels
-            nn.Conv2d(33, output_channels, 1)             # 33 -> output_channels
+            nn.Conv2d(33, output_channels-1, 1)            # 33 -> output_channels(-1)
         )
         self.final_act = final_act
 
         # For the doubly-shrunk mask
-        #if mode == 'pool':
-        #    self.double_shrink = nn.AvgPool2d(kernel_size=shrink_fac**2, stride=shrink_fac**2)
-        #else:
-        #    self.double_shrink = partial(F.interpolate, scale_factor=1.0/(shrink_fac**2), mode='bilinear')
+        if mode == 'pool':
+            self.double_shrink = nn.AvgPool2d(kernel_size=shrink_fac**2, stride=shrink_fac**2)
+        else:
+            self.double_shrink = partial(F.interpolate, scale_factor=1.0/(shrink_fac**2), mode='bilinear')
 
 
     def forward(self, mask_pixels):  # e.g. shape = [batch, 1, 128, 128]
@@ -128,14 +239,18 @@ class MaskEncoder(nn.Module):
         if self.final_act is not None: 
             learned_features = self.final_act(learned_features)
         
-        #doubly_shrunk = self.double_shrink(mask_pixels)
-        #mask_latents = torch.cat([doubly_shrunk, learned_features], dim=1)   # "red"  channel will show doubly-shunk mask, other 3 channels are learned features
+        doubly_shrunk = self.double_shrink(mask_pixels)
         mask_latents = learned_features
+        mask_latents = torch.cat([doubly_shrunk, learned_features], dim=1)   # "red"  channel will show doubly-shunk mask, other 3 channels are learned features
         return mask_latents
 
 
+################### blending source and noise via mask 
 
-
+def mask_blending(source, mask, noise=None):
+    if noise is None: noise = torch.randn_like(source)
+    source = source + mask*(noise - source)
+    return source
 
 
 ###################   Data and data-augmentation routines   ##########################
@@ -204,7 +319,7 @@ _status_msg = ''
 def generate_mask(size=(128,128), 
         mask_type = '',  # can specify a mask algorithm name or else it'll be randomly chosen according to choices & p
         choices = ['total', 'brush', 'rectangles', 'noise', 'nothing'],  # names of different kinds of masks  to choose from
-        p=        [ 0.3,    0.4,      0.2,         0.05,    0.05],      # probabilities for each kind of mask
+        p=        [ 0.4,    0.35,      0.15,         0.05,    0.05],      # probabilities for each kind of mask
         #p=        [ 0.01,    0.02,      0.87,         0.05,    0.05],      # probabilities for each kind of mask
         to_tensor=True, device='cpu', debug=False):
     """Ideally we want something that resembles human-drawn "brush strokes" with a circular cross section"""

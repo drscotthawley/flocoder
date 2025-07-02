@@ -22,7 +22,6 @@ from flocoder.codecs import setup_codec
 from flocoder.data import PreEncodedDataset, InfiniteDataset, create_image_loaders
 from flocoder.general import save_checkpoint, keep_recent_files, handle_config_path, ldcfg, CosineAnnealingWarmRestartsDecay
 from flocoder.sampling import sampler, warp_time, evaluate_model
-from flocoder.hdit import ImageTransformerDenoiserModelV2, LevelSpec, MappingSpec, GlobalAttentionSpec
 from flocoder.codebook_analysis import CodebookUsageTracker
 from flocoder.inpainting import MaskEncoder, mask_blending, approx_AL
 from flocoder.ot import compute_ot_pairing
@@ -291,6 +290,7 @@ def train_flow(config):
     if pre_encoded: # usually we want this
         model = Unet( dim=H, channels=C, dim_mults=dim_mults, n_classes=n_classes, mask_cond=inpainting).to(device)
     else:  # added this to test HDiT
+        from flocoder.hdit import ImageTransformerDenoiserModelV2, LevelSpec, MappingSpec, GlobalAttentionSpec
         levels = [ LevelSpec(depth=2, width=256, d_ff=768, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0),
                    LevelSpec(depth=4, width=512, d_ff=1536, self_attn=GlobalAttentionSpec(d_head=64), dropout=0.0), ]
         mapping = MappingSpec(depth=2, width=256, d_ff=768, dropout=0.0)
