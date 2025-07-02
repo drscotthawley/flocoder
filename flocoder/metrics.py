@@ -475,6 +475,19 @@ def get_gradient_stats(discriminator):
     return {'d_grad_norm': math.sqrt(total_norm)}
 
 
+# Match min/max of reconstructed images to original images
+def normalize_recon(orig, recon):
+    for i in range(len(recon)):
+        for c in range(3):  # RGB channels
+            orig_min, orig_max   = orig[i,c].min(),   orig[i,c].max()
+            recon_min, recon_max = recon[i,c].min(),  recon[i,c].max()
+
+            # Rescale reconstructed image to match original's range
+            if recon_max > recon_min:  # Avoid division by zero
+                recon[i,c] = ((recon[i,c] - recon_min) / (recon_max - recon_min)) * (orig_max - orig_min) + orig_min
+    return recon
+
+
 
 
 @torch.no_grad()
@@ -486,6 +499,27 @@ def compute_sample_metrics(pred_latents, target_latents,   # latent space
     batch_size = min(pred_latents.shape[0], target_latents.shape[0])
     if debug: print("compute_sample_metrics: using batch_size = ",batch_size)
     if debug: print_vram("start")
+
+    # make sure our normalization is ok
+    decoded_pred = normalize_recon(decoded_target, decoded_pred)
+
+    if debug:
+        print(f"DEBUG: decoded_target - shape: {decoded_target.shape}")
+        print(f"DEBUG: decoded_target - dtype: {decoded_target.dtype}")
+        print(f"DEBUG: decoded_target - min: {decoded_target.min():.6f}, max: {decoded_target.max():.6f}")
+        print(f"DEBUG: decoded_target - mean: {decoded_target.mean():.6f}, std: {decoded_target.std():.6f}")
+        print(f"DEBUG: decoded_target - has_nan: {torch.isnan(decoded_target).any()}")
+        print(f"DEBUG: decoded_target - has_inf: {torch.isinf(decoded_target).any()}")
+        
+        print(f"DEBUG: decoded_pred - shape: {decoded_pred.shape}")
+        print(f"DEBUG: decoded_pred - dtype: {decoded_pred.dtype}")
+        print(f"DEBUG: decoded_pred - min: {decoded_pred.min():.6f}, max: {decoded_pred.max():.6f}")
+        print(f"DEBUG: decoded_pred - mean: {decoded_pred.mean():.6f}, std: {decoded_pred.std():.6f}")
+        print(f"DEBUG: decoded_pred - has_nan: {torch.isnan(decoded_pred).any()}")
+        print(f"DEBUG: decoded_pred - has_inf: {torch.isinf(decoded_pred).any()}")
+        
+        print(f"DEBUG: pred_latents - min: {pred_latents.min():.6f}, max: {pred_latents.max():.6f}")
+        print(f"DEBUG: target_latents - min: {target_latents.min():.6f}, max: {target_latents.max():.6f}")
 
     with torch.no_grad():
         if debug: print_vram("before sinkhorn_latent")

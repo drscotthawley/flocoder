@@ -415,7 +415,7 @@ def train_flow(config):
                 #v_model = model(x, t * t_scale, aug_cond=None, class_cond=cond) for use with HDiT
                 v_model = model(x, t * t_scale, cond={'class_cond': class_cond, 'mask_cond': mask_cond})
                 val_loss = loss_fn(v_model, v_guess)
-                wandb.log( {"Loss/val": val_loss.item()})
+                if use_wandb: wandb.log( {"Loss/val": val_loss.item()})
 
             print("Generating sample outputs...")
             eval_batch_size = target.shape[0]  # full batch now that we're chunking 768 # to avoid OOM

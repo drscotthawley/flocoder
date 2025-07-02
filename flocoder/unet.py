@@ -312,7 +312,7 @@ class Unet(nn.Module):
         # other forms of conditioning are simply added to time conditioning via learned mappings
         if cond is not None: 
             if isinstance(cond, dict):   # preferred: dict-based cond signal(s)
-                if 'class_cond' in cond and hasattr(self,'class_cond_mlp'):
+                if cond.get('class_cond') is not None and hasattr(self,'class_cond_mlp'):
                     t += self.class_cond_mlp(cond['class_cond'])
             else:                        # cond is just a class_id (deprecated)
                 warnings.warn("Non-dict cond signals are deprecated. Use cond['class_cond'] instead", warnings.DeprecationWarning, stacklevel=2)

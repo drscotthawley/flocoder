@@ -639,18 +639,20 @@ class SD_VAE_Wrapper(nn.Module):
     def encode(self, x):
         """Encode images to latent space."""
         # Dynamically scale to [-1,1] range regardless of input range
-        x_min, x_max = x.min(), x.max()
-        self.last_min, self.last_max = x_min, x_max  # Store for decode scaling
-        if x_min != -1 or x_max != 1:
-            x = 2 * (x - x_min) / (x_max - x_min + 1e-8) - 1
-        return self.vae.encode(x).latent_dist.sample()
+        return self.vae.encode(x).latent_dist.mean.detach()
+        #x_min, x_max = x.min(), x.max()
+        #self.last_min, self.last_max = x_min, x_max  # Store for decode scaling
+        #if x_min != -1 or x_max != 1:
+        #    x = 2 * (x - x_min) / (x_max - x_min + 1e-8) - 1
+        #return self.vae.encode(x).latent_dist.sample()
 
     def decode(self, z, orig_size=None, noise_strength=0.0):
         """Decode latents to images, automatically handling the .sample() call."""
         decoded = self.vae.decode(z).sample
-        if hasattr(self, 'last_min') and hasattr(self, 'last_max'):
-            return 0.5 * (decoded + 1) * (self.last_max - self.last_min) + self.last_min
         return decoded
+        #if hasattr(self, 'last_min') and hasattr(self, 'last_max'):
+        #    return 0.5 * (decoded + 1) * (self.last_max - self.last_min) + self.last_min
+        #return decoded
 
     def forward(self, x, noise_strength=0.0, minval=0, get_stats=False):
         """Forward pass through encoder and decoder."""

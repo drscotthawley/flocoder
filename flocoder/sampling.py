@@ -154,15 +154,15 @@ def _decode_latents(codec,          # the codec/autoencoder model
                    device=None,
                    debug=False): 
     """Decode latents to images"""
-    if debug: print_vram("decode_latents: before decoding")
+    if debug: print_vram(f"_decode_latents: before decoding.")
     if device is None:
         try:
             device = next(codec.parameters()).device
         except: 
             device = latents.device
-    if debug: print("decode_latents: device = ",device)
+    if debug: print("_decode_latents: device = ",device)
     decoded = codec.decode(latents.to(device))
-    if debug: print_vram("decode_latents: after decoding")
+    if debug: print_vram("_decode_latents: after decoding")
     return g2rgb(decoded, keep_gray=keep_gray) if is_midi else decoded
 
 
@@ -269,12 +269,12 @@ def evaluate_model(model,            # the flow model to evaluate
                                                  is_midi=is_midi, keep_gray=keep_gray, source=source,)
 
     print("Computing sample metrics...") 
-    if debug: print_vram("after sampler, before decoding target")
+    if debug: print_vram(f"after sampler, before decoding target, latents min = {target_latents[:batch_size].min()}, max = {target_latents[:batch_size].max()}")
     decoded_target = decode_latents(codec, target_latents[:batch_size], is_midi, keep_gray) 
-    if debug: print_vram("after decoding target")
+    if debug: print_vram(f"after decoding target, decoded_target min = {decoded_target.min()}, max = {decoded_target.max()}")
     metrics = compute_sample_metrics(pred_latents, target_latents, decoded_pred, decoded_target)
 
-    if cb_tracker is not None:
+    if hasattr(codec,'vq') and cb_tracker is not None:
         print("Performing codebook analysis. target_latents.device =",target_latents.device) 
         # Track target latents
         z_compressed = target_latents.permute(0, 2, 3, 1).reshape(-1, target_latents.shape[1])
