@@ -14,9 +14,9 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+# minimal base dependencies; see other targets below for more
 dependencies = [
     "hydra-core>=1.3.0",
-    "natten>=0.20.1",
     "pyyaml>=6.0",
 ]
 
@@ -31,14 +31,13 @@ colab-has = [
     "tqdm>=4.64.0",
     "plotly",
     "scipy>=1.15.3",
+    "diffusers",
 ]
-
-# Minimal for Colab inference
-colab = ["diffusers"]
 
 # Inference dependencies
 recommended = [
-    "colab",
+    "colab-has",
+    "natten>=0.20.1",
     "vector-quantize-pytorch>=1.22.4"]
 
 # MIDI support
