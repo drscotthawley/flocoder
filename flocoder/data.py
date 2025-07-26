@@ -11,7 +11,6 @@ from multiprocessing import Pool, cpu_count, set_start_method
 from functools import partial
 from tqdm import tqdm
 
-from .pianoroll import midi_to_pr_img
 from .general import ldcfg
 
 # general utility
@@ -271,6 +270,7 @@ class MIDIImageDataset(ImageListDataset):
                          split='all', val_ratio=val_ratio, seed=seed, debug=debug) # split='all' since we already did the split
  
     def convert_one(self, midi_file, debug=True):
+        from .pianoroll import midi_to_pr_img
         if debug: print(f"Converting {midi_file} to image")
         midi_to_pr_img(midi_file, self.midi_img_dir, show_chords=False, all_chords=None, 
                           chord_names=None, filter_mp=True, add_onsets=self.add_onsets,
