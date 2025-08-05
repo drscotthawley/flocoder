@@ -20,5 +20,4 @@ preencoding:
 flow:
   unet:
     n_classes: 102
-
-project_name: "fc-flow-flowers-sd"
+  project_name: "fc-flow-flowers-sd"
